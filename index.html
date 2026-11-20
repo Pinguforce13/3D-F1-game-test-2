@@ -163,7 +163,7 @@
       color: #34d399;
       font-variant-numeric: tabular-nums;
     }
-    .curb-tag {
+    .surface-tag {
       margin-top: 8px;
       font-size: 11px;
       font-weight: 700;
@@ -171,7 +171,7 @@
       opacity: 0;
       transition: opacity 0.12s ease;
     }
-    .curb-tag.active {
+    .surface-tag.active {
       opacity: 1;
     }
     .controls-bar {
@@ -237,7 +237,7 @@
     <div class="speed"><span id="speed-val">0</span><span>KM/H</span></div>
     <div class="lap-info">Ronde: <strong id="lap-num">1</strong> | Tijd: <strong id="lap-time">0.00s</strong></div>
     <div class="best-lap">Beste ronde: <strong id="best-time">--</strong></div>
-    <div id="curb-indicator" class="curb-tag">⚡ ZACHTE CURB VIBRATIE</div>
+    <div id="surface-indicator" class="surface-tag">⚡ ZACHTE CURB VIBRATIE</div>
   </div>
 
   <div class="controls-bar" id="bottom-bar">
@@ -246,14 +246,14 @@
 
   <script>
     const DEFAULT_POINTS = [
-      [-120, -95],
-      [110, -95],
-      [165, -10],
-      [100, 100],
-      [-25, 50],
-      [-140, 95],
+      [-175, -135],
+      [165, -135],
+      [245, -15],
+      [150, 145],
+      [-40, 75],
+      [-205, 140],
     ];
-    const STORAGE_KEY = 'f1_3d_custom_track_v10';
+    const STORAGE_KEY = 'f1_3d_custom_track_v12';
 
     function loadPoints() {
       try {
@@ -272,15 +272,16 @@
     let rotatingCam = false;
     let lastMouse = { x: 0, y: 0 };
 
-    // Veelvoudig bredere baan + duidelijke rood-witte curbs
-    const TRACK_HALF_WIDTH = 30;
-    const CURB_HALF_WIDTH = 36;
+    // Extra wijde Formule 1 baan + duidelijke curbs
+    const TRACK_HALF_WIDTH = 54;
+    const CURB_HALF_WIDTH = 63;
 
-    // 3D Camera state
+    // 3D Camera state (editor + onafhankelijke chase-cam voor racen)
     let camYaw = 0.65;
     let camPitch = 0.85;
-    let camDist = 360;
+    let camDist = 480;
     let camTarget = { x: 0, y: 0, z: 0 };
+    let chaseYaw = 0;
 
     const canvas = document.getElementById('game-canvas');
     const ctx = canvas.getContext('2d');
@@ -322,23 +323,26 @@
       }
     };
 
-    // Bomen in het landschap rondom het circuit (nooit op asfalt of curbs)
+    // Bomen & graspollen in het 3D-landschap
     let trees = [];
-    function generateTrees(trackSamples) {
+    let grassTufts = [];
+
+    function generateEnvironment(trackSamples) {
       trees = [];
+      grassTufts = [];
       let seed = 9182;
       const rand = () => {
         seed = (seed * 1664525 + 1013904223) % 4294967296;
         return seed / 4294967296;
       };
 
-      for (let i = 0; i < 80; i++) {
-        const tx = (rand() - 0.5) * 620;
-        const tz = (rand() - 0.5) * 620;
+      for (let i = 0; i < 95; i++) {
+        const tx = (rand() - 0.5) * 920;
+        const tz = (rand() - 0.5) * 920;
         let tooClose = false;
         for (let j = 0; j < trackSamples.length; j += 2) {
           const d = Math.hypot(trackSamples[j].x - tx, trackSamples[j].z - tz);
-          if (d < CURB_HALF_WIDTH + 20) {
+          if (d < CURB_HALF_WIDTH + 24) {
             tooClose = true;
             break;
           }
@@ -347,15 +351,36 @@
           trees.push({
             x: tx,
             z: tz,
-            scale: 0.85 + rand() * 0.85,
+            scale: 0.9 + rand() * 0.9,
             crownColor: rand() > 0.5 ? '#15803d' : '#166534',
             highlightColor: '#22c55e'
           });
         }
       }
+
+      // Gras-accenten zodat het 3D-grasveld echte diepte en snelheidsgevoel geeft
+      for (let k = 0; k < 260; k++) {
+        const gx = (rand() - 0.5) * 900;
+        const gz = (rand() - 0.5) * 900;
+        let onTrack = false;
+        for (let j = 0; j < trackSamples.length; j += 3) {
+          const d = Math.hypot(trackSamples[j].x - gx, trackSamples[j].z - gz);
+          if (d < CURB_HALF_WIDTH + 4) {
+            onTrack = true;
+            break;
+          }
+        }
+        if (!onTrack) {
+          grassTufts.push({
+            x: gx,
+            z: gz,
+            w: 4 + rand() * 6,
+            color: rand() > 0.5 ? '#15803d' : '#22c55e'
+          });
+        }
+      }
     }
 
-    // Catmull-Rom spline voor vloeiende bochten
     function catmullRom(p0, p1, p2, p3, t) {
       const t2 = t * t;
       const t3 = t2 * t;
@@ -365,7 +390,7 @@
       };
     }
 
-    function sampleTrack(samplesPerSeg = 32) {
+    function sampleTrack(samplesPerSeg = 34) {
       const res = [];
       const n = points.length;
       if (n < 3) return res;
@@ -381,7 +406,6 @@
       return res;
     }
 
-    // 3D Camera positie
     function getCameraPos() {
       const horiz = Math.cos(camPitch) * camDist;
       return {
@@ -391,7 +415,6 @@
       };
     }
 
-    // 3D Projectie: met juiste right- en up-vector zodat alles 100% rechtop staat!
     function project3D(wx, wy, wz) {
       const cPos = getCameraPos();
       const dx = wx - cPos.x;
@@ -404,47 +427,6 @@
       const fLen = Math.hypot(fx, fy, fz) || 1;
       const fwd = { x: fx / fLen, y: fy / fLen, z: fz / fLen };
 
-      // right = normalize(cross(fwd, worldUp(0,1,0))) -> (-fwd.z, 0, fwd.x)
-      let rx = -fwd.z;
-      let ry = 0;
-      let rz = fwd.x;
-      const rLen = Math.hypot(rx, ry, rz) || 1;
-      rx /= rLen;
-      rz /= rLen;
-
-      // up = cross(right, fwd) -> wijst altijd naar de hemel!
-      const ux = ry * fwd.z - rz * fwd.y;
-      const uy = rz * fwd.x - rx * fwd.z;
-      const uz = rx * fwd.y - ry * fwd.x;
-
-      const camX = dx * rx + dy * ry + dz * rz;
-      const camY = dx * ux + dy * uy + dz * uz;
-      const camZ = dx * fwd.x + dy * fwd.y + dz * fwd.z;
-
-      if (camZ <= 2) return null;
-      const fov = Math.min(canvas.width, canvas.height) * 0.95;
-      const scale = fov / camZ;
-      return {
-        x: canvas.width * 0.5 + camX * scale,
-        y: canvas.height * 0.5 - camY * scale,
-        scale: scale,
-        depth: camZ
-      };
-    }
-
-    // Raycast schermklik -> grondvlak (y = 0)
-    function screenToGround(sx, sy) {
-      const cPos = getCameraPos();
-      const fov = Math.min(canvas.width, canvas.height) * 0.95;
-      const nx = (sx - canvas.width * 0.5) / fov;
-      const ny = -(sy - canvas.height * 0.5) / fov;
-
-      const fx = camTarget.x - cPos.x;
-      const fy = camTarget.y - cPos.y;
-      const fz = camTarget.z - cPos.z;
-      const fLen = Math.hypot(fx, fy, fz) || 1;
-      const fwd = { x: fx / fLen, y: fy / fLen, z: fz / fLen };
-
       let rx = -fwd.z;
       let ry = 0;
       let rz = fwd.x;
@@ -456,569 +438,4 @@
       const uy = rz * fwd.x - rx * fwd.z;
       const uz = rx * fwd.y - ry * fwd.x;
 
-      const dirX = fwd.x + nx * rx + ny * ux;
-      const dirY = fwd.y + nx * ry + ny * uy;
-      const dirZ = fwd.z + nx * rz + ny * uz;
-
-      if (Math.abs(dirY) < 0.0001) return null;
-      const t = -cPos.y / dirY;
-      if (t <= 0) return null;
-      return { x: cPos.x + dirX * t, z: cPos.z + dirZ * t };
-    }
-
-    // Zachte curb vibratie (subtiel geluid + beeldtrilling)
-    let audioCtx = null;
-    let curbOsc = null;
-    let curbGain = null;
-
-    function updateCurbVibration(onCurb, speedRatio) {
-      const tag = document.getElementById('curb-indicator');
-      if (tag) {
-        tag.classList.toggle('active', Boolean(onCurb && speedRatio > 0.08));
-      }
-      try {
-        if (onCurb && speedRatio > 0.08) {
-          if (!audioCtx) {
-            const AC = window.AudioContext || window.webkitAudioContext;
-            if (AC) {
-              audioCtx = new AC();
-              curbOsc = audioCtx.createOscillator();
-              curbGain = audioCtx.createGain();
-              curbOsc.type = 'triangle';
-              curbOsc.frequency.value = 35;
-              curbGain.gain.value = 0.0001;
-              curbOsc.connect(curbGain);
-              curbGain.connect(audioCtx.destination);
-              curbOsc.start();
-            }
-          }
-          if (audioCtx && audioCtx.state === 'suspended') {
-            audioCtx.resume();
-          }
-          if (curbOsc && curbGain) {
-            curbOsc.frequency.setTargetAtTime(32 + speedRatio * 20, audioCtx.currentTime, 0.04);
-            curbGain.gain.setTargetAtTime(0.022 * speedRatio, audioCtx.currentTime, 0.04);
-          }
-        } else if (curbGain && audioCtx) {
-          curbGain.gain.setTargetAtTime(0.0001, audioCtx.currentTime, 0.05);
-        }
-      } catch (_) {}
-    }
-
-    // Race state
-    const keys = {};
-    window.addEventListener('keydown', (e) => {
-      keys[e.key.toLowerCase()] = true;
-      if (mode === 'race' && ['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(e.key.toLowerCase())) {
-        e.preventDefault();
-      }
-    });
-    window.addEventListener('keyup', (e) => {
-      keys[e.key.toLowerCase()] = false;
-    });
-
-    let car = { x: 0, z: 0, angle: 0, speed: 0 };
-    let lap = 1;
-    let lapStart = 0;
-    let bestLap = null;
-    let halfwayReached = false;
-
-    function resetCar() {
-      const pts = sampleTrack(32);
-      if (pts.length < 4) return;
-      const p0 = pts[0];
-      const p1 = pts[1];
-      car.x = p0.x;
-      car.z = p0.z;
-      car.angle = Math.atan2(p1.x - p0.x, p1.z - p0.z);
-      car.speed = 0;
-      lap = 1;
-      lapStart = performance.now();
-      halfwayReached = false;
-      updateCurbVibration(false, 0);
-      document.getElementById('lap-num').textContent = '1';
-      document.getElementById('lap-time').textContent = '0.00s';
-    }
-
-    window.setMode = function (nextMode) {
-      if (nextMode === 'race' && points.length < 3) {
-        setBar('Plaats eerst minimaal 3 punten om te racen!');
-        return;
-      }
-      mode = nextMode;
-      draggingIndex = null;
-      const isRace = mode === 'race';
-
-      document.getElementById('editor-controls').style.display = isRace ? 'none' : 'block';
-      document.getElementById('race-controls').style.display = isRace ? 'block' : 'none';
-      document.getElementById('hud').classList.toggle('visible', isRace);
-      document.getElementById('status-text').innerHTML = isRace
-        ? 'Modus: <strong style="color:#fb7185">Racen</strong>'
-        : 'Modus: <strong style="color:#4ade80">Tekenen</strong>';
-
-      if (isRace) {
-        generateTrees(sampleTrack(32));
-        resetCar();
-        setBar('WASD of Pijltjestoetsen om te rijden • R = Reset naar start');
-      } else {
-        updateCurbVibration(false, 0);
-        camTarget = { x: 0, y: 0, z: 0 };
-        camYaw = 0.65;
-        camPitch = 0.85;
-        camDist = 360;
-        setBar('Sleep een punt of klik op "+ Bocht Toevoegen" en klik op het gras.');
-      }
-    };
-
-    // Muis interacties op canvas
-    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
-
-    canvas.addEventListener('mousedown', (e) => {
-      lastMouse = { x: e.clientX, y: e.clientY };
-
-      if (e.button === 2 || (e.button === 0 && e.shiftKey)) {
-        rotatingCam = true;
-        return;
-      }
-
-      if (mode !== 'edit' || e.button !== 0) return;
-
-      for (let i = 0; i < points.length; i++) {
-        const proj = project3D(points[i][0], 3, points[i][1]);
-        if (proj && Math.hypot(proj.x - e.clientX, proj.y - e.clientY) < 20) {
-          draggingIndex = i;
-          return;
-        }
-      }
-
-      if (addMode) {
-        const hit = screenToGround(e.clientX, e.clientY);
-        if (hit) {
-          points.push([
-            Math.max(-250, Math.min(250, Math.round(hit.x))),
-            Math.max(-250, Math.min(250, Math.round(hit.z)))
-          ]);
-          updateNodeCount();
-        }
-      }
-    });
-
-    window.addEventListener('mousemove', (e) => {
-      const dx = e.clientX - lastMouse.x;
-      const dy = e.clientY - lastMouse.y;
-      lastMouse = { x: e.clientX, y: e.clientY };
-
-      if (rotatingCam && mode === 'edit') {
-        camYaw -= dx * 0.008;
-        camPitch = Math.max(0.22, Math.min(1.45, camPitch + dy * 0.007));
-        return;
-      }
-
-      if (mode === 'edit' && draggingIndex !== null) {
-        const hit = screenToGround(e.clientX, e.clientY);
-        if (hit) {
-          points[draggingIndex] = [
-            Math.max(-250, Math.min(250, hit.x)),
-            Math.max(-250, Math.min(250, hit.z))
-          ];
-        }
-      }
-    });
-
-    window.addEventListener('mouseup', () => {
-      draggingIndex = null;
-      rotatingCam = false;
-    });
-
-    canvas.addEventListener('wheel', (e) => {
-      if (mode !== 'edit') return;
-      e.preventDefault();
-      camDist = Math.max(105, Math.min(560, camDist + e.deltaY * 0.25));
-    }, { passive: false });
-
-    // Teken een 3D-doos (voor de Formule 1 wagen)
-    function draw3DBox(cx, cy, cz, w, h, d, yaw, fillColor, strokeColor) {
-      const cos = Math.cos(yaw);
-      const sin = Math.sin(yaw);
-      const hw = w * 0.5;
-      const hh = h * 0.5;
-      const hd = d * 0.5;
-
-      const corners = [
-        [-hw, -hh, -hd], [hw, -hh, -hd], [hw, -hh, hd], [-hw, -hh, hd],
-        [-hw,  hh, -hd], [hw,  hh, -hd], [hw,  hh, hd], [-hw,  hh, hd],
-      ].map(([lx, ly, lz]) => {
-        const rx = lx * cos + lz * sin;
-        const rz = -lx * sin + lz * cos;
-        return project3D(cx + rx, cy + ly, cz + rz);
-      });
-
-      if (corners.some(c => !c)) return;
-
-      const faces = [
-        [4, 5, 6, 7],
-        [0, 1, 5, 4],
-        [1, 2, 6, 5],
-        [2, 3, 7, 6],
-        [3, 0, 4, 7],
-      ];
-
-      ctx.fillStyle = fillColor;
-      ctx.strokeStyle = strokeColor || fillColor;
-      ctx.lineWidth = 1;
-
-      faces.forEach((f, idx) => {
-        ctx.beginPath();
-        f.forEach((cIdx, i) => {
-          const pt = corners[cIdx];
-          if (i === 0) ctx.moveTo(pt.x, pt.y);
-          else ctx.lineTo(pt.x, pt.y);
-        });
-        ctx.closePath();
-        if (idx === 0) {
-          ctx.fill();
-        } else {
-          ctx.globalAlpha = 0.85;
-          ctx.fill();
-          ctx.globalAlpha = 1;
-        }
-        ctx.stroke();
-      });
-    }
-
-    function drawTree(tree, vibX, vibY) {
-      const base = project3D(tree.x, 0, tree.z);
-      const top = project3D(tree.x, 24 * tree.scale, tree.z);
-      if (!base || !top) return;
-
-      // Stam
-      ctx.strokeStyle = '#78350f';
-      ctx.lineWidth = Math.max(2, 2.5 * base.scale * tree.scale);
-      ctx.beginPath();
-      ctx.moveTo(base.x + vibX, base.y + vibY);
-      ctx.lineTo(top.x + vibX, top.y + vibY);
-      ctx.stroke();
-
-      // Bladerdak
-      const r = Math.max(5, 9.5 * top.scale * tree.scale);
-      ctx.fillStyle = tree.crownColor;
-      ctx.beginPath();
-      ctx.arc(top.x + vibX, top.y + vibY, r, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.fillStyle = tree.highlightColor;
-      ctx.beginPath();
-      ctx.arc(top.x - r * 0.25 + vibX, top.y - r * 0.25 + vibY, r * 0.55, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    function draw3DF1Car() {
-      const cos = Math.cos(car.angle);
-      const sin = Math.sin(car.angle);
-      const toWorld = (lx, ly, lz) => ({
-        x: car.x + lx * cos + lz * sin,
-        y: ly,
-        z: car.z - lx * sin + lz * cos
-      });
-
-      // Schaduw onder de wagen
-      const shadowPos = project3D(car.x, 0.1, car.z);
-      if (shadowPos) {
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.42)';
-        ctx.beginPath();
-        ctx.ellipse(
-          shadowPos.x,
-          shadowPos.y,
-          19 * shadowPos.scale * 3.5,
-          9.5 * shadowPos.scale * 3.5,
-          -car.angle,
-          0,
-          Math.PI * 2
-        );
-        ctx.fill();
-      }
-
-      // 4 Wielen
-      const wheels = [
-        [-4.2, 1.5,  6.5],
-        [ 4.2, 1.5,  6.5],
-        [-4.5, 1.6, -5.2],
-        [ 4.5, 1.6, -5.2],
-      ];
-      wheels.forEach(([wx, wy, wz]) => {
-        const wPos = toWorld(wx, wy, wz);
-        draw3DBox(wPos.x, wPos.y, wPos.z, 1.6, 3.0, 3.2, car.angle, '#111827', '#030712');
-      });
-
-      // Hoofdchassis
-      const bodyPos = toWorld(0, 1.8, 0.4);
-      draw3DBox(bodyPos.x, bodyPos.y, bodyPos.z, 5.2, 1.6, 13.5, car.angle, '#e11d48', '#9f1239');
-
-      // Cockpit & Halo
-      const cockpitPos = toWorld(0, 2.8, 0.2);
-      draw3DBox(cockpitPos.x, cockpitPos.y, cockpitPos.z, 2.6, 1.1, 4.2, car.angle, '#0f172a', '#334155');
-
-      // Neus
-      const nosePos = toWorld(0, 1.5, 8.8);
-      draw3DBox(nosePos.x, nosePos.y, nosePos.z, 2.4, 1.1, 4.5, car.angle, '#e11d48', '#881337');
-
-      // Voorvleugel
-      const frontWingPos = toWorld(0, 0.8, 11.2);
-      draw3DBox(frontWingPos.x, frontWingPos.y, frontWingPos.z, 8.2, 0.45, 2.2, car.angle, '#f8fafc', '#cbd5e1');
-
-      // Achtervleugel
-      const rearWingPos = toWorld(0, 3.8, -6.6);
-      draw3DBox(rearWingPos.x, rearWingPos.y, rearWingPos.z, 6.8, 0.55, 2.0, car.angle, '#e11d48', '#f8fafc');
-    }
-
-    function resize() {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-    }
-    window.addEventListener('resize', resize);
-    resize();
-    updateNodeCount();
-
-    let lastTime = performance.now();
-    function loop(now) {
-      requestAnimationFrame(loop);
-      const dt = Math.min((now - lastTime) / 1000, 0.05);
-      lastTime = now;
-
-      const trackSamples = sampleTrack(32);
-      let onCurb = false;
-      let vibX = 0;
-      let vibY = 0;
-
-      if (mode === 'race' && trackSamples.length > 5) {
-        if (keys['r']) resetCar();
-
-        const gas = keys['w'] || keys['arrowup'];
-        const brake = keys['s'] || keys['arrowdown'];
-        const left = keys['a'] || keys['arrowleft'];
-        const right = keys['d'] || keys['arrowright'];
-
-        // Zoek dichtstbijzijnde punt op circuit
-        let bestIdx = 0;
-        let minD2 = Infinity;
-        for (let i = 0; i < trackSamples.length; i++) {
-          const dx = trackSamples[i].x - car.x;
-          const dz = trackSamples[i].z - car.z;
-          const d2 = dx * dx + dz * dz;
-          if (d2 < minD2) {
-            minD2 = d2;
-            bestIdx = i;
-          }
-        }
-
-        const dist = Math.sqrt(minD2);
-        onCurb = dist > (TRACK_HALF_WIDTH - 2) && dist <= (CURB_HALF_WIDTH + 1.5);
-        const onRoad = dist <= (CURB_HALF_WIDTH + 2);
-        const maxSpeed = onRoad ? 185 : 92;
-        const accel = onRoad ? 130 : 70;
-
-        if (gas) car.speed += accel * dt;
-        else if (brake) car.speed -= 105 * dt;
-        else car.speed *= Math.pow(0.28, dt);
-
-        car.speed = Math.max(-45, Math.min(maxSpeed, car.speed));
-
-        if (Math.abs(car.speed) > 2) {
-          const steer = (left ? 1 : 0) - (right ? 1 : 0);
-          const dir = car.speed >= 0 ? 1 : -1;
-          car.angle += steer * 2.2 * dir * dt;
-        }
-
-        car.x += Math.sin(car.angle) * car.speed * dt;
-        car.z += Math.cos(car.angle) * car.speed * dt;
-
-        const speedRatio = Math.min(1, Math.abs(car.speed) / 140);
-        updateCurbVibration(onCurb, speedRatio);
-
-        if (onCurb && Math.abs(car.speed) > 8) {
-          // Heel zachte vibratie over de curbs
-          vibX = Math.sin(now * 0.085) * 1.3 * speedRatio;
-          vibY = Math.cos(now * 0.11) * 1.0 * speedRatio;
-        }
-
-        // Ronde-detectie
-        const progress = bestIdx / trackSamples.length;
-        if (progress > 0.45 && progress < 0.65) halfwayReached = true;
-        if (halfwayReached && progress < 0.07) {
-          const sec = (now - lapStart) / 1000;
-          if (bestLap === null || sec < bestLap) {
-            bestLap = sec;
-            document.getElementById('best-time').textContent = bestLap.toFixed(2) + 's';
-          }
-          lap += 1;
-          lapStart = now;
-          halfwayReached = false;
-          document.getElementById('lap-num').textContent = String(lap);
-        }
-
-        document.getElementById('lap-time').textContent = ((now - lapStart) / 1000).toFixed(2) + 's';
-        document.getElementById('speed-val').textContent = String(Math.round(Math.abs(car.speed) * 1.85));
-
-        // Chase camera achter auto (rechtop met baan mooi onder de wagen!)
-        camTarget.x = car.x + Math.sin(car.angle) * 18;
-        camTarget.y = 2;
-        camTarget.z = car.z + Math.cos(car.angle) * 18;
-        camYaw = car.angle + Math.PI;
-        camPitch = 0.34;
-        camDist = 66;
-      }
-
-      // Achtergrond: in race-modus mooie blauwe lucht met zon + veel groen gras
-      if (mode === 'race') {
-        const skyGrad = ctx.createLinearGradient(0, 0, 0, canvas.height * 0.62);
-        skyGrad.addColorStop(0, '#0284c7');
-        skyGrad.addColorStop(0.6, '#38bdf8');
-        skyGrad.addColorStop(1, '#bae6fd');
-        ctx.fillStyle = skyGrad;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        // Stralende zon rechtsboven
-        const sunX = canvas.width * 0.78;
-        const sunY = canvas.height * 0.14;
-        const sunGlow = ctx.createRadialGradient(sunX, sunY, 8, sunX, sunY, 95);
-        sunGlow.addColorStop(0, 'rgba(254, 249, 195, 1)');
-        sunGlow.addColorStop(0.35, 'rgba(253, 224, 71, 0.75)');
-        sunGlow.addColorStop(1, 'rgba(253, 224, 71, 0)');
-        ctx.fillStyle = sunGlow;
-        ctx.beginPath();
-        ctx.arc(sunX, sunY, 95, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Groot grasveld vanaf horizon naar voren
-        const grassGrad = ctx.createLinearGradient(0, canvas.height * 0.34, 0, canvas.height);
-        grassGrad.addColorStop(0, '#16a34a');
-        grassGrad.addColorStop(1, '#15803d');
-        ctx.fillStyle = grassGrad;
-        ctx.fillRect(0, canvas.height * 0.34, canvas.width, canvas.height * 0.66);
-      } else {
-        // Editor achtergrond & 3D raster
-        const skyGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
-        skyGrad.addColorStop(0, '#090d16');
-        skyGrad.addColorStop(0.55, '#111827');
-        skyGrad.addColorStop(1, '#14532d');
-        ctx.fillStyle = skyGrad;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        const groundSpan = 280;
-        const step = 45;
-        ctx.strokeStyle = 'rgba(34, 197, 94, 0.22)';
-        ctx.lineWidth = 1;
-        for (let g = -groundSpan; g <= groundSpan; g += step) {
-          const a1 = project3D(g, 0, -groundSpan);
-          const a2 = project3D(g, 0, groundSpan);
-          if (a1 && a2) {
-            ctx.beginPath();
-            ctx.moveTo(a1.x, a1.y);
-            ctx.lineTo(a2.x, a2.y);
-            ctx.stroke();
-          }
-          const b1 = project3D(-groundSpan, 0, g);
-          const b2 = project3D(groundSpan, 0, g);
-          if (b1 && b2) {
-            ctx.beginPath();
-            ctx.moveTo(b1.x, b1.y);
-            ctx.lineTo(b2.x, b2.y);
-            ctx.stroke();
-          }
-        }
-      }
-
-      // Teken 3D racebaan (rood-witte curbs + breed asfalt)
-      if (trackSamples.length > 2) {
-        const len = trackSamples.length;
-        const segs = [];
-        const cPos = getCameraPos();
-        for (let i = 0; i < len; i++) {
-          const pA = trackSamples[i];
-          const pB = trackSamples[(i + 1) % len];
-          const mx = (pA.x + pB.x) * 0.5 - cPos.x;
-          const mz = (pA.z + pB.z) * 0.5 - cPos.z;
-          segs.push({ i, pA, pB, dist2: mx * mx + mz * mz });
-        }
-        segs.sort((a, b) => b.dist2 - a.dist2);
-
-        segs.forEach(({ i, pA, pB }) => {
-          const tx = pB.x - pA.x;
-          const tz = pB.z - pA.z;
-          const tLen = Math.hypot(tx, tz) || 1;
-          const nx = -tz / tLen;
-          const nz = tx / tLen;
-
-          const aL_c = project3D(pA.x - nx * CURB_HALF_WIDTH, 0.1, pA.z - nz * CURB_HALF_WIDTH);
-          const aR_c = project3D(pA.x + nx * CURB_HALF_WIDTH, 0.1, pA.z + nz * CURB_HALF_WIDTH);
-          const bR_c = project3D(pB.x + nx * CURB_HALF_WIDTH, 0.1, pB.z + nz * CURB_HALF_WIDTH);
-          const bL_c = project3D(pB.x - nx * CURB_HALF_WIDTH, 0.1, pB.z - nz * CURB_HALF_WIDTH);
-
-          if (aL_c && aR_c && bR_c && bL_c) {
-            ctx.fillStyle = (i % 2 === 0) ? '#ef4444' : '#f8fafc';
-            ctx.beginPath();
-            ctx.moveTo(aL_c.x + vibX, aL_c.y + vibY);
-            ctx.lineTo(aR_c.x + vibX, aR_c.y + vibY);
-            ctx.lineTo(bR_c.x + vibX, bR_c.y + vibY);
-            ctx.lineTo(bL_c.x + vibX, bL_c.y + vibY);
-            ctx.closePath();
-            ctx.fill();
-          }
-
-          const aL = project3D(pA.x - nx * TRACK_HALF_WIDTH, 0.2, pA.z - nz * TRACK_HALF_WIDTH);
-          const aR = project3D(pA.x + nx * TRACK_HALF_WIDTH, 0.2, pA.z + nz * TRACK_HALF_WIDTH);
-          const bR = project3D(pB.x + nx * TRACK_HALF_WIDTH, 0.2, pB.z + nz * TRACK_HALF_WIDTH);
-          const bL = project3D(pB.x - nx * TRACK_HALF_WIDTH, 0.2, pB.z - nz * TRACK_HALF_WIDTH);
-
-          if (aL && aR && bR && bL) {
-            ctx.fillStyle = i === 0 ? '#f8fafc' : '#1e293b';
-            ctx.beginPath();
-            ctx.moveTo(aL.x + vibX, aL.y + vibY);
-            ctx.lineTo(aR.x + vibX, aR.y + vibY);
-            ctx.lineTo(bR.x + vibX, bR.y + vibY);
-            ctx.lineTo(bL.x + vibX, bL.y + vibY);
-            ctx.closePath();
-            ctx.fill();
-          }
-        });
-      }
-
-      // Teken 3D bomen tijdens het racen
-      if (mode === 'race') {
-        const cPos = getCameraPos();
-        const sortedTrees = trees
-          .map(t => ({
-            t,
-            d2: (t.x - cPos.x) * (t.x - cPos.x) + (t.z - cPos.z) * (t.z - cPos.z)
-          }))
-          .sort((a, b) => b.d2 - a.d2);
-
-        sortedTrees.forEach(({ t }) => drawTree(t, vibX, vibY));
-      }
-
-      // Teken 3D F1-wagen in race-modus
-      if (mode === 'race' && trackSamples.length > 2) {
-        draw3DF1Car();
-      }
-
-      // Teken controlepunten in edit-modus
-      if (mode === 'edit') {
-        points.forEach((pt, idx) => {
-          const p = project3D(pt[0], 3, pt[1]);
-          if (!p) return;
-          const r = Math.max(7, Math.min(16, 440 * p.scale));
-          ctx.beginPath();
-          ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-          ctx.fillStyle = idx === 0 ? '#22c55e' : draggingIndex === idx ? '#facc15' : '#ef4444';
-          ctx.fill();
-          ctx.lineWidth = 2.5;
-          ctx.strokeStyle = '#ffffff';
-          ctx.stroke();
-        });
-      }
-    }
-
-    requestAnimationFrame(loop);
-  </script>
-</body>
-</html>
+      const camX = dx * rx + dy *
