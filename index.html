@@ -22,31 +22,16 @@
       display: block;
       z-index: 1;
     }
-    #err-banner {
-      display: none;
-      position: fixed;
-      top: 16px;
-      left: 50%;
-      transform: translateX(-50%);
-      background: #991b1b;
-      color: #fef2f2;
-      border: 1px solid #f87171;
-      padding: 10px 16px;
-      border-radius: 10px;
-      font-size: 12px;
-      z-index: 999;
-      max-width: 90vw;
-    }
     .panel {
       position: fixed;
       top: 16px;
       left: 16px;
       width: 315px;
-      background: rgba(15, 23, 42, 0.92);
+      background: rgba(15, 23, 42, 0.94);
       border: 1px solid rgba(148, 163, 184, 0.3);
       border-radius: 14px;
       padding: 16px;
-      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.55);
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
       z-index: 100;
     }
     .title-row {
@@ -101,7 +86,7 @@
       position: fixed;
       top: 16px;
       right: 16px;
-      background: rgba(15, 23, 42, 0.9);
+      background: rgba(15, 23, 42, 0.94);
       border: 1px solid rgba(148, 163, 184, 0.3);
       border-radius: 14px;
       padding: 16px 20px;
@@ -129,7 +114,7 @@
       bottom: 16px;
       left: 50%;
       transform: translateX(-50%);
-      background: rgba(15, 23, 42, 0.9);
+      background: rgba(15, 23, 42, 0.92);
       border: 1px solid rgba(148, 163, 184, 0.25);
       padding: 9px 18px;
       border-radius: 999px;
@@ -142,7 +127,6 @@
 </head>
 <body>
   <canvas id="game-canvas"></canvas>
-  <div id="err-banner"></div>
 
   <div class="panel">
     <div class="title-row">
@@ -196,77 +180,63 @@
   </div>
 
   <script>
-    window.addEventListener('error', function (e) {
-      var b = document.getElementById('err-banner');
-      if (b) {
-        b.style.display = 'block';
-        b.textContent = ' fout: ' + (e.message || 'onbekend');
-      }
-    });
-
-    var DEFAULT_POINTS = [
+    const DEFAULT_POINTS = [
       [-115, -90],
       [105, -90],
       [155, -10],
       [95, 95],
       [-25, 45],
-      [-135, 90]
+      [-135, 90],
     ];
-    var STORAGE_KEY = 'f1_3d_custom_track_v7';
+    const STORAGE_KEY = 'f1_3d_custom_track_v8';
 
     function loadPoints() {
       try {
-        var raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+        const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
         if (Array.isArray(raw) && raw.length >= 3) return raw;
-      } catch (e) {}
-      return DEFAULT_POINTS.map(function (p) { return [p[0], p[1]]; });
+      } catch (_) {}
+      return DEFAULT_POINTS.map(p => [p[0], p[1]]);
     }
 
-    var points = loadPoints();
-    var mode = 'edit';
-    var addMode = false;
-    var draggingIndex = null;
-    var rotatingCam = false;
-    var lastMouse = { x: 0, y: 0 };
+    let points = loadPoints();
+    let mode = 'edit';
+    let addMode = false;
+    let draggingIndex = null;
+    let rotatingCam = false;
+    let lastMouse = { x: 0, y: 0 };
 
-    var ROAD_HALF_WIDTH = 28;
-    var CURB_OUTER_WIDTH = 33.5;
+    // Veelvoudig bredere baan + duidelijke curbs
+    const TRACK_HALF_WIDTH = 28;
+    const CURB_HALF_WIDTH = 33.5;
 
-    var camYaw = 0.65;
-    var camPitch = 0.85;
-    var camDist = 340;
-    var camTarget = { x: 0, y: 0, z: 0 };
-    var camPos = {
-      x: Math.sin(0.65) * Math.cos(0.85) * 340,
-      y: Math.sin(0.85) * 340,
-      z: Math.cos(0.65) * Math.cos(0.85) * 340
-    };
+    // 3D Camera state
+    let camYaw = 0.65;
+    let camPitch = 0.85;
+    let camDist = 340;
+    let camTarget = { x: 0, y: 0, z: 0 };
+    let raceCamPos = null;
 
-    var canvas = document.getElementById('game-canvas');
-    var ctx = canvas.getContext('2d');
+    const canvas = document.getElementById('game-canvas');
+    const ctx = canvas.getContext('2d');
 
     function setBar(text) {
-      var el = document.getElementById('bottom-bar');
-      if (el) el.textContent = text;
+      document.getElementById('bottom-bar').textContent = text;
     }
 
     function updateNodeCount() {
-      var el = document.getElementById('node-count');
-      if (el) el.textContent = String(points.length);
+      document.getElementById('node-count').textContent = String(points.length);
     }
 
     window.toggleAdd = function () {
       addMode = !addMode;
-      var btn = document.getElementById('btn-add');
-      if (btn) {
-        btn.classList.toggle('active', addMode);
-        btn.textContent = addMode ? '+ Bocht Toevoegen (AAN - klik op gras)' : '+ Bocht Toevoegen (UIT)';
-      }
-      setBar(addMode ? 'Klik op het groene gras om een punt te plaatsen!' : 'Sleep de gekleurde punten om je baan te vormen.');
+      const btn = document.getElementById('btn-add');
+      btn.classList.toggle('active', addMode);
+      btn.textContent = addMode ? '+ Bocht Toevoegen (AAN - klik op gras)' : '+ Bocht Toevoegen (UIT)';
+      setBar(addMode ? 'Klik ergens op het groene gras om een punt te plaatsen!' : 'Sleep de gekleurde punten om je baan te vormen.');
     };
 
     window.resetTrack = function () {
-      points = DEFAULT_POINTS.map(function (p) { return [p[0], p[1]]; });
+      points = DEFAULT_POINTS.map(p => [p[0], p[1]]);
       updateNodeCount();
       setBar('Baan gereset naar standaard circuit.');
     };
@@ -275,100 +245,115 @@
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(points));
         setBar('Jouw baan is bewaard!');
-      } catch (e) {
+      } catch (_) {
         setBar('Baan bewaard voor deze sessie.');
       }
     };
 
-    var trees = [];
-    function generateTrees(trackSamples) {
+    // Bomen genereren rondom de baan (nooit op het asfalt)
+    let trees = [];
+    function buildTrees(trackSamples) {
       trees = [];
-      var seed = 4219;
-      function rand() {
+      let seed = 1337;
+      const rand = () => {
         seed = (seed * 1664525 + 1013904223) % 4294967296;
         return seed / 4294967296;
-      }
+      };
 
-      for (var i = 0; i < 65; i++) {
-        var tx = (rand() - 0.5) * 520;
-        var tz = (rand() - 0.5) * 520;
-        var tooClose = false;
-        for (var j = 0; j < trackSamples.length; j += 3) {
-          var d = Math.hypot(trackSamples[j].x - tx, trackSamples[j].z - tz);
-          if (d < CURB_OUTER_WIDTH + 16) {
-            tooClose = true;
+      for (let i = 0; i < 70; i++) {
+        const tx = (rand() - 0.5) * 560;
+        const tz = (rand() - 0.5) * 560;
+        let blocked = false;
+        for (let j = 0; j < trackSamples.length; j += 3) {
+          const d = Math.hypot(trackSamples[j].x - tx, trackSamples[j].z - tz);
+          if (d < CURB_HALF_WIDTH + 18) {
+            blocked = true;
             break;
           }
         }
-        if (!tooClose) {
+        if (!blocked) {
           trees.push({
             x: tx,
             z: tz,
-            scale: 0.75 + rand() * 0.75,
-            shade: rand() > 0.5 ? '#15803d' : '#166534'
+            scale: 0.8 + rand() * 0.7,
+            color: rand() > 0.5 ? '#15803d' : '#166534'
           });
         }
       }
     }
 
+    // Catmull-Rom spline voor vloeiende bochten
     function catmullRom(p0, p1, p2, p3, t) {
-      var t2 = t * t;
-      var t3 = t2 * t;
+      const t2 = t * t;
+      const t3 = t2 * t;
       return {
         x: 0.5 * ((2 * p1[0]) + (-p0[0] + p2[0]) * t + (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * t2 + (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * t3),
         z: 0.5 * ((2 * p1[1]) + (-p0[1] + p2[1]) * t + (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2 + (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3)
       };
     }
 
-    function sampleTrack(samplesPerSeg) {
-      var res = [];
-      var n = points.length;
+    function sampleTrack(samplesPerSeg = 30) {
+      const res = [];
+      const n = points.length;
       if (n < 3) return res;
-      for (var i = 0; i < n; i++) {
-        var p0 = points[(i - 1 + n) % n];
-        var p1 = points[i];
-        var p2 = points[(i + 1) % n];
-        var p3 = points[(i + 2) % n];
-        for (var s = 0; s < samplesPerSeg; s++) {
+      for (let i = 0; i < n; i++) {
+        const p0 = points[(i - 1 + n) % n];
+        const p1 = points[i];
+        const p2 = points[(i + 1) % n];
+        const p3 = points[(i + 2) % n];
+        for (let s = 0; s < samplesPerSeg; s++) {
           res.push(catmullRom(p0, p1, p2, p3, s / samplesPerSeg));
         }
       }
       return res;
     }
 
-    function getCameraBasis() {
-      var fx = camTarget.x - camPos.x;
-      var fy = camTarget.y - camPos.y;
-      var fz = camTarget.z - camPos.z;
-      var fLen = Math.hypot(fx, fy, fz) || 1;
-      var fwd = { x: fx / fLen, y: fy / fLen, z: fz / fLen };
-
-      var rx = fwd.y * 1 - fwd.z * 0;
-      var ry = fwd.z * 0 - fwd.x * 1;
-      var rz = fwd.x * 0 - fwd.y * 0;
-      var rLen = Math.hypot(rx, ry, rz) || 1;
-      rx /= rLen; ry /= rLen; rz /= rLen;
-
-      var ux = ry * fwd.z - rz * fwd.y;
-      var uy = rz * fwd.x - rx * fwd.z;
-      var uz = rx * fwd.y - ry * fwd.x;
-
-      return { fwd: fwd, right: { x: rx, y: ry, z: rz }, up: { x: ux, y: uy, z: uz } };
+    // 3D projectie (exact de werkende camera-berekening, maar met juiste UP-richting zodat je nooit ondersteboven rijdt!)
+    function getCameraPos() {
+      if (mode === 'race' && raceCamPos) {
+        return raceCamPos;
+      }
+      const horiz = Math.cos(camPitch) * camDist;
+      return {
+        x: camTarget.x + Math.sin(camYaw) * horiz,
+        y: camTarget.y + Math.sin(camPitch) * camDist,
+        z: camTarget.z + Math.cos(camYaw) * horiz
+      };
     }
 
     function project3D(wx, wy, wz) {
-      var basis = getCameraBasis();
-      var dx = wx - camPos.x;
-      var dy = wy - camPos.y;
-      var dz = wz - camPos.z;
+      const cPos = getCameraPos();
+      const dx = wx - cPos.x;
+      const dy = wy - cPos.y;
+      const dz = wz - cPos.z;
 
-      var camX = dx * basis.right.x + dy * basis.right.y + dz * basis.right.z;
-      var camY = dx * basis.up.x + dy * basis.up.y + dz * basis.up.z;
-      var camZ = dx * basis.fwd.x + dy * basis.fwd.y + dz * basis.fwd.z;
+      const fx = camTarget.x - cPos.x;
+      const fy = camTarget.y - cPos.y;
+      const fz = camTarget.z - cPos.z;
+      const fLen = Math.hypot(fx, fy, fz) || 1;
+      const fwd = { x: fx / fLen, y: fy / fLen, z: fz / fLen };
+
+      // Right vector loodrecht op fwd en wereld-boven (0, 1, 0):
+      // right = normalize(cross(fwd, (0, 1, 0))) = (-fwd.z, 0, fwd.x)
+      let rx = -fwd.z;
+      let ry = 0;
+      let rz = fwd.x;
+      const rLen = Math.hypot(rx, ry, rz) || 1;
+      rx /= rLen;
+      rz /= rLen;
+
+      // Up vector = cross(right, fwd) -> wijst nu netjes omhoog!
+      const ux = ry * fwd.z - rz * fwd.y;
+      const uy = rz * fwd.x - rx * fwd.z;
+      const uz = rx * fwd.y - ry * fwd.x;
+
+      const camX = dx * rx + dy * ry + dz * rz;
+      const camY = dx * ux + dy * uy + dz * uz;
+      const camZ = dx * fwd.x + dy * fwd.y + dz * fwd.z;
 
       if (camZ <= 2) return null;
-      var fov = Math.min(canvas.width, canvas.height) * 0.92;
-      var scale = fov / camZ;
+      const fov = Math.min(canvas.width, canvas.height) * 0.95;
+      const scale = fov / camZ;
       return {
         x: canvas.width * 0.5 + camX * scale,
         y: canvas.height * 0.5 - camY * scale,
@@ -377,68 +362,103 @@
       };
     }
 
+    // Raycast schermklik -> grondvlak (y = 0)
     function screenToGround(sx, sy) {
-      var basis = getCameraBasis();
-      var fov = Math.min(canvas.width, canvas.height) * 0.92;
-      var nx = (sx - canvas.width * 0.5) / fov;
-      var ny = -(sy - canvas.height * 0.5) / fov;
+      const cPos = getCameraPos();
+      const fov = Math.min(canvas.width, canvas.height) * 0.95;
+      const nx = (sx - canvas.width * 0.5) / fov;
+      const ny = -(sy - canvas.height * 0.5) / fov;
 
-      var dirX = basis.fwd.x + nx * basis.right.x + ny * basis.up.x;
-      var dirY = basis.fwd.y + nx * basis.right.y + ny * basis.up.y;
-      var dirZ = basis.fwd.z + nx * basis.right.z + ny * basis.up.z;
+      const fx = camTarget.x - cPos.x;
+      const fy = camTarget.y - cPos.y;
+      const fz = camTarget.z - cPos.z;
+      const fLen = Math.hypot(fx, fy, fz) || 1;
+      const fwd = { x: fx / fLen, y: fy / fLen, z: fz / fLen };
+
+      let rx = -fwd.z;
+      let ry = 0;
+      let rz = fwd.x;
+      const rLen = Math.hypot(rx, ry, rz) || 1;
+      rx /= rLen;
+      rz /= rLen;
+
+      const ux = ry * fwd.z - rz * fwd.y;
+      const uy = rz * fwd.x - rx * fwd.z;
+      const uz = rx * fwd.y - ry * fwd.x;
+
+      const dirX = fwd.x + nx * rx + ny * ux;
+      const dirY = fwd.y + nx * ry + ny * uy;
+      const dirZ = fwd.z + nx * rz + ny * uz;
 
       if (Math.abs(dirY) < 0.0001) return null;
-      var t = -camPos.y / dirY;
+      const t = -cPos.y / dirY;
       if (t <= 0) return null;
-      return { x: camPos.x + dirX * t, z: camPos.z + dirZ * t };
+      return { x: cPos.x + dirX * t, z: cPos.z + dirZ * t };
     }
 
-    var audioCtx = null;
-    var rumbleGain = null;
-    var rumbleOsc = null;
+    // Zachte curb vibratie (geluid + visueel)
+    let audioCtx = null;
+    let curbOsc = null;
+    let curbGain = null;
 
-    function updateCurbVibration(onCurb, speedRatio) {
-      var tag = document.getElementById('curb-indicator');
-      if (tag) tag.classList.toggle('active', Boolean(onCurb && speedRatio > 0.1));
+    function updateCurbFeedback(active, speedRatio) {
+      const tag = document.getElementById('curb-indicator');
+      if (tag) tag.classList.toggle('active', Boolean(active && speedRatio > 0.08));
+
       try {
-        if (onCurb && speedRatio > 0.1) {
+        if (active && speedRatio > 0.08) {
           if (!audioCtx) {
-            var AC = window.AudioContext || window.webkitAudioContext;
+            const AC = window.AudioContext || window.webkitAudioContext;
             if (AC) {
               audioCtx = new AC();
-              rumbleOsc = audioCtx.createOscillator();
-              rumbleGain = audioCtx.createGain();
-              rumbleOsc.type = 'triangle';
-              rumbleOsc.frequency.value = 36;
-              rumbleGain.gain.value = 0.0001;
-              rumbleOsc.connect(rumbleGain);
-              rumbleGain.connect(audioCtx.destination);
-              rumbleOsc.start();
+              curbOsc = audioCtx.createOscillator();
+              curbGain = audioCtx.createGain();
+              curbOsc.type = 'triangle';
+              curbOsc.frequency.value = 36;
+              curbGain.gain.value = 0.0001;
+              curbOsc.connect(curbGain);
+              curbGain.connect(audioCtx.destination);
+              curbOsc.start();
             }
           }
           if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
-          if (rumbleGain && rumbleOsc) {
-            rumbleOsc.frequency.setTargetAtTime(34 + speedRatio * 20, audioCtx.currentTime, 0.04);
-            rumbleGain.gain.setTargetAtTime(0.02 * speedRatio, audioCtx.currentTime, 0.04);
+          if (curbOsc && curbGain) {
+            curbOsc.frequency.setTargetAtTime(34 + speedRatio * 20, audioCtx.currentTime, 0.04);
+            curbGain.gain.setTargetAtTime(0.022 * speedRatio, audioCtx.currentTime, 0.04);
           }
-        } else if (rumbleGain && audioCtx) {
-          rumbleGain.gain.setTargetAtTime(0.0001, audioCtx.currentTime, 0.05);
+        } else if (curbGain && audioCtx) {
+          curbGain.gain.setTargetAtTime(0.0001, audioCtx.currentTime, 0.05);
         }
-      } catch (e) {}
+      } catch (_) {}
     }
 
-    var keys = {};
-    window.addEventListener('keydown', function (e) {
-      var k = e.key.toLowerCase();
-      keys[k] = true;
-      if (mode === 'race' && ['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].indexOf(k) !== -1) {
+    // Race state
+    const keys = {};
+    window.addEventListener('keydown', (e) => {
+      keys[e.key.toLowerCase()] = true;
+      if (mode === 'race' && ['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(e.key.toLowerCase())) {
         e.preventDefault();
       }
     });
-    window.addEventListener('keyup', function (e) {
-      keys[e.key.toLowerCase()] = false;
-    });
+    window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
 
-    var car = { x: 0, z: 0, angle: 0, speed: 0 };
-    var lap = 1;
-    var
+    let car = { x: 0, z: 0, angle: 0, speed: 0 };
+    let lap = 1;
+    let lapStart = 0;
+    let bestLap = null;
+    let halfwayReached = false;
+
+    function resetCar() {
+      const pts = sampleTrack(30);
+      if (pts.length < 4) return;
+      const p0 = pts[0];
+      const p1 = pts[1];
+      car.x = p0.x;
+      car.z = p0.z;
+      car.angle = Math.atan2(p1.x - p0.x, p1.z - p0.z);
+      car.speed = 0;
+      lap = 1;
+      lapStart = performance.now();
+      halfwayReached = false;
+      updateCurbFeedback(false, 0);
+      document.getElementById('lap-num').text
