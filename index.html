@@ -22,6 +22,21 @@
       display: block;
       z-index: 1;
     }
+    #err-banner {
+      display: none;
+      position: fixed;
+      top: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #991b1b;
+      color: #fef2f2;
+      border: 1px solid #f87171;
+      padding: 10px 16px;
+      border-radius: 10px;
+      font-size: 12px;
+      z-index: 999;
+      max-width: 90vw;
+    }
     .panel {
       position: fixed;
       top: 16px;
@@ -127,6 +142,7 @@
 </head>
 <body>
   <canvas id="game-canvas"></canvas>
+  <div id="err-banner"></div>
 
   <div class="panel">
     <div class="title-row">
@@ -172,7 +188,7 @@
     <div class="speed"><span id="speed-val">0</span><span>KM/H</span></div>
     <div class="lap-info">Ronde: <strong id="lap-num">1</strong> | Tijd: <strong id="lap-time">0.00s</strong></div>
     <div class="best-lap">Beste ronde: <strong id="best-time">--</strong></div>
-    <div id="curb-indicator" class="curb-tag">⚡ CURB VIBRATIE</div>
+    <div id="curb-indicator" class="curb-tag">⚡ ZACHTE CURB VIBRATIE</div>
   </div>
 
   <div class="controls-bar" id="bottom-bar">
@@ -180,63 +196,77 @@
   </div>
 
   <script>
-    const DEFAULT_POINTS = [
+    window.addEventListener('error', function (e) {
+      var b = document.getElementById('err-banner');
+      if (b) {
+        b.style.display = 'block';
+        b.textContent = ' fout: ' + (e.message || 'onbekend');
+      }
+    });
+
+    var DEFAULT_POINTS = [
       [-115, -90],
       [105, -90],
       [155, -10],
       [95, 95],
       [-25, 45],
-      [-135, 90],
+      [-135, 90]
     ];
-    const STORAGE_KEY = 'f1_3d_custom_track_v6';
+    var STORAGE_KEY = 'f1_3d_custom_track_v7';
 
     function loadPoints() {
       try {
-        const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+        var raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
         if (Array.isArray(raw) && raw.length >= 3) return raw;
-      } catch (_) {}
-      return DEFAULT_POINTS.map(p => [p[0], p[1]]);
+      } catch (e) {}
+      return DEFAULT_POINTS.map(function (p) { return [p[0], p[1]]; });
     }
 
-    let points = loadPoints();
-    let mode = 'edit'; // 'edit' | 'race'
-    let addMode = false;
-    let draggingIndex = null;
-    let rotatingCam = false;
-    let lastMouse = { x: 0, y: 0 };
+    var points = loadPoints();
+    var mode = 'edit';
+    var addMode = false;
+    var draggingIndex = null;
+    var rotatingCam = false;
+    var lastMouse = { x: 0, y: 0 };
 
-    // Bredere baan!
-    const ROAD_HALF_WIDTH = 28;
-    const CURB_OUTER_WIDTH = 33.5;
+    var ROAD_HALF_WIDTH = 28;
+    var CURB_OUTER_WIDTH = 33.5;
 
-    // 3D Camera state
-    let camYaw = 0.65;
-    let camPitch = 0.85;
-    let camDist = 340;
-    let camTarget = { x: 0, y: 0, z: 0 };
-    let camPos = { x: 0, y: 200, z: 200 };
+    var camYaw = 0.65;
+    var camPitch = 0.85;
+    var camDist = 340;
+    var camTarget = { x: 0, y: 0, z: 0 };
+    var camPos = {
+      x: Math.sin(0.65) * Math.cos(0.85) * 340,
+      y: Math.sin(0.85) * 340,
+      z: Math.cos(0.65) * Math.cos(0.85) * 340
+    };
 
-    const canvas = document.getElementById('game-canvas');
-    const ctx = canvas.getContext('2d');
+    var canvas = document.getElementById('game-canvas');
+    var ctx = canvas.getContext('2d');
 
     function setBar(text) {
-      document.getElementById('bottom-bar').textContent = text;
+      var el = document.getElementById('bottom-bar');
+      if (el) el.textContent = text;
     }
 
     function updateNodeCount() {
-      document.getElementById('node-count').textContent = String(points.length);
+      var el = document.getElementById('node-count');
+      if (el) el.textContent = String(points.length);
     }
 
     window.toggleAdd = function () {
       addMode = !addMode;
-      const btn = document.getElementById('btn-add');
-      btn.classList.toggle('active', addMode);
-      btn.textContent = addMode ? '+ Bocht Toevoegen (AAN - klik op gras)' : '+ Bocht Toevoegen (UIT)';
-      setBar(addMode ? 'Klik ergens op het groene gras om een punt te plaatsen!' : 'Sleep de gekleurde punten om je baan te vormen.');
+      var btn = document.getElementById('btn-add');
+      if (btn) {
+        btn.classList.toggle('active', addMode);
+        btn.textContent = addMode ? '+ Bocht Toevoegen (AAN - klik op gras)' : '+ Bocht Toevoegen (UIT)';
+      }
+      setBar(addMode ? 'Klik op het groene gras om een punt te plaatsen!' : 'Sleep de gekleurde punten om je baan te vormen.');
     };
 
     window.resetTrack = function () {
-      points = DEFAULT_POINTS.map(p => [p[0], p[1]]);
+      points = DEFAULT_POINTS.map(function (p) { return [p[0], p[1]]; });
       updateNodeCount();
       setBar('Baan gereset naar standaard circuit.');
     };
@@ -245,30 +275,26 @@
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(points));
         setBar('Jouw baan is bewaard!');
-      } catch (_) {
+      } catch (e) {
         setBar('Baan bewaard voor deze sessie.');
       }
     };
 
-    // Vaste bomen rondom de baan (buiten de baan geplaatst)
-    const trees = [];
+    var trees = [];
     function generateTrees(trackSamples) {
-      trees.length = 0;
-      // Deterministische pseudo-random zodat bomen niet telkens verspringen
-      let seed = 4219;
-      const rand = () => {
+      trees = [];
+      var seed = 4219;
+      function rand() {
         seed = (seed * 1664525 + 1013904223) % 4294967296;
         return seed / 4294967296;
-      };
+      }
 
-      for (let i = 0; i < 65; i++) {
-        const tx = (rand() - 0.5) * 520;
-        const tz = (rand() - 0.5) * 520;
-
-        // Check afstand tot elke punt op het circuit zodat boom nooit op asfalt/curbs staat
-        let tooClose = false;
-        for (let j = 0; j < trackSamples.length; j += 3) {
-          const d = Math.hypot(trackSamples[j].x - tx, trackSamples[j].z - tz);
+      for (var i = 0; i < 65; i++) {
+        var tx = (rand() - 0.5) * 520;
+        var tz = (rand() - 0.5) * 520;
+        var tooClose = false;
+        for (var j = 0; j < trackSamples.length; j += 3) {
+          var d = Math.hypot(trackSamples[j].x - tx, trackSamples[j].z - tz);
           if (d < CURB_OUTER_WIDTH + 16) {
             tooClose = true;
             break;
@@ -286,109 +312,104 @@
     }
 
     function catmullRom(p0, p1, p2, p3, t) {
-      const t2 = t * t;
-      const t3 = t2 * t;
+      var t2 = t * t;
+      var t3 = t2 * t;
       return {
         x: 0.5 * ((2 * p1[0]) + (-p0[0] + p2[0]) * t + (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * t2 + (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * t3),
         z: 0.5 * ((2 * p1[1]) + (-p0[1] + p2[1]) * t + (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2 + (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3)
       };
     }
 
-    function sampleTrack(samplesPerSeg = 32) {
-      const res = [];
-      const n = points.length;
+    function sampleTrack(samplesPerSeg) {
+      var res = [];
+      var n = points.length;
       if (n < 3) return res;
-      for (let i = 0; i < n; i++) {
-        const p0 = points[(i - 1 + n) % n];
-        const p1 = points[i];
-        const p2 = points[(i + 1) % n];
-        const p3 = points[(i + 2) % n];
-        for (let s = 0; s < samplesPerSeg; s++) {
+      for (var i = 0; i < n; i++) {
+        var p0 = points[(i - 1 + n) % n];
+        var p1 = points[i];
+        var p2 = points[(i + 1) % n];
+        var p3 = points[(i + 2) % n];
+        for (var s = 0; s < samplesPerSeg; s++) {
           res.push(catmullRom(p0, p1, p2, p3, s / samplesPerSeg));
         }
       }
       return res;
     }
 
-    // Orthonormale camera-basis (nooit ondersteboven!)
     function getCameraBasis() {
-      const fx = camTarget.x - camPos.x;
-      const fy = camTarget.y - camPos.y;
-      const fz = camTarget.z - camPos.z;
-      const fLen = Math.hypot(fx, fy, fz) || 1;
-      const fwd = { x: fx / fLen, y: fy / fLen, z: fz / fLen };
+      var fx = camTarget.x - camPos.x;
+      var fy = camTarget.y - camPos.y;
+      var fz = camTarget.z - camPos.z;
+      var fLen = Math.hypot(fx, fy, fz) || 1;
+      var fwd = { x: fx / fLen, y: fy / fLen, z: fz / fLen };
 
-      const worldUp = { x: 0, y: 1, z: 0 };
-      // right = fwd x worldUp
-      let rx = fwd.y * worldUp.z - fwd.z * worldUp.y;
-      let ry = fwd.z * worldUp.x - fwd.x * worldUp.z;
-      let rz = fwd.x * worldUp.y - fwd.y * worldUp.x;
-      const rLen = Math.hypot(rx, ry, rz) || 1;
+      var rx = fwd.y * 1 - fwd.z * 0;
+      var ry = fwd.z * 0 - fwd.x * 1;
+      var rz = fwd.x * 0 - fwd.y * 0;
+      var rLen = Math.hypot(rx, ry, rz) || 1;
       rx /= rLen; ry /= rLen; rz /= rLen;
 
-      // up = right x fwd
-      const ux = ry * fwd.z - rz * fwd.y;
-      const uy = rz * fwd.x - rx * fwd.z;
-      const uz = rx * fwd.y - ry * fwd.x;
+      var ux = ry * fwd.z - rz * fwd.y;
+      var uy = rz * fwd.x - rx * fwd.z;
+      var uz = rx * fwd.y - ry * fwd.x;
 
-      return { fwd, right: { x: rx, y: ry, z: rz }, up: { x: ux, y: uy, z: uz } };
+      return { fwd: fwd, right: { x: rx, y: ry, z: rz }, up: { x: ux, y: uy, z: uz } };
     }
 
     function project3D(wx, wy, wz) {
-      const { fwd, right, up } = getCameraBasis();
-      const dx = wx - camPos.x;
-      const dy = wy - camPos.y;
-      const dz = wz - camPos.z;
+      var basis = getCameraBasis();
+      var dx = wx - camPos.x;
+      var dy = wy - camPos.y;
+      var dz = wz - camPos.z;
 
-      const camX = dx * right.x + dy * right.y + dz * right.z;
-      const camY = dx * up.x + dy * up.y + dz * up.z;
-      const camZ = dx * fwd.x + dy * fwd.y + dz * fwd.z;
+      var camX = dx * basis.right.x + dy * basis.right.y + dz * basis.right.z;
+      var camY = dx * basis.up.x + dy * basis.up.y + dz * basis.up.z;
+      var camZ = dx * basis.fwd.x + dy * basis.fwd.y + dz * basis.fwd.z;
 
       if (camZ <= 2) return null;
-      const fov = Math.min(canvas.width, canvas.height) * 0.92;
-      const scale = fov / camZ;
+      var fov = Math.min(canvas.width, canvas.height) * 0.92;
+      var scale = fov / camZ;
       return {
         x: canvas.width * 0.5 + camX * scale,
         y: canvas.height * 0.5 - camY * scale,
-        scale,
+        scale: scale,
         depth: camZ
       };
     }
 
     function screenToGround(sx, sy) {
-      const { fwd, right, up } = getCameraBasis();
-      const fov = Math.min(canvas.width, canvas.height) * 0.92;
-      const nx = (sx - canvas.width * 0.5) / fov;
-      const ny = -(sy - canvas.height * 0.5) / fov;
+      var basis = getCameraBasis();
+      var fov = Math.min(canvas.width, canvas.height) * 0.92;
+      var nx = (sx - canvas.width * 0.5) / fov;
+      var ny = -(sy - canvas.height * 0.5) / fov;
 
-      const dirX = fwd.x + nx * right.x + ny * up.x;
-      const dirY = fwd.y + nx * right.y + ny * up.y;
-      const dirZ = fwd.z + nx * right.z + ny * up.z;
+      var dirX = basis.fwd.x + nx * basis.right.x + ny * basis.up.x;
+      var dirY = basis.fwd.y + nx * basis.right.y + ny * basis.up.y;
+      var dirZ = basis.fwd.z + nx * basis.right.z + ny * basis.up.z;
 
       if (Math.abs(dirY) < 0.0001) return null;
-      const t = -camPos.y / dirY;
+      var t = -camPos.y / dirY;
       if (t <= 0) return null;
       return { x: camPos.x + dirX * t, z: camPos.z + dirZ * t };
     }
 
-    // Zachte curb vibratie (audio + visuele micro-trilling)
-    let audioCtx = null;
-    let rumbleGain = null;
-    let rumbleOsc = null;
+    var audioCtx = null;
+    var rumbleGain = null;
+    var rumbleOsc = null;
 
     function updateCurbVibration(onCurb, speedRatio) {
-      const tag = document.getElementById('curb-indicator');
-      if (onCurb && speedRatio > 0.1) {
-        tag.classList.add('active');
-        try {
+      var tag = document.getElementById('curb-indicator');
+      if (tag) tag.classList.toggle('active', Boolean(onCurb && speedRatio > 0.1));
+      try {
+        if (onCurb && speedRatio > 0.1) {
           if (!audioCtx) {
-            const AC = window.AudioContext || window.webkitAudioContext;
+            var AC = window.AudioContext || window.webkitAudioContext;
             if (AC) {
               audioCtx = new AC();
               rumbleOsc = audioCtx.createOscillator();
               rumbleGain = audioCtx.createGain();
               rumbleOsc.type = 'triangle';
-              rumbleOsc.frequency.value = 38;
+              rumbleOsc.frequency.value = 36;
               rumbleGain.gain.value = 0.0001;
               rumbleOsc.connect(rumbleGain);
               rumbleGain.connect(audioCtx.destination);
@@ -397,83 +418,27 @@
           }
           if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
           if (rumbleGain && rumbleOsc) {
-            rumbleOsc.frequency.setTargetAtTime(34 + speedRatio * 24, audioCtx.currentTime, 0.04);
-            rumbleGain.gain.setTargetAtTime(0.025 * speedRatio, audioCtx.currentTime, 0.04);
+            rumbleOsc.frequency.setTargetAtTime(34 + speedRatio * 20, audioCtx.currentTime, 0.04);
+            rumbleGain.gain.setTargetAtTime(0.02 * speedRatio, audioCtx.currentTime, 0.04);
           }
-        } catch (_) {}
-      } else {
-        tag.classList.remove('active');
-        if (rumbleGain && audioCtx) {
-          try { rumbleGain.gain.setTargetAtTime(0.0001, audioCtx.currentTime, 0.05); } catch (_) {}
+        } else if (rumbleGain && audioCtx) {
+          rumbleGain.gain.setTargetAtTime(0.0001, audioCtx.currentTime, 0.05);
         }
-      }
+      } catch (e) {}
     }
 
-    // Race state
-    const keys = {};
-    window.addEventListener('keydown', (e) => {
-      keys[e.key.toLowerCase()] = true;
-      if (mode === 'race' && ['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(e.key.toLowerCase())) {
+    var keys = {};
+    window.addEventListener('keydown', function (e) {
+      var k = e.key.toLowerCase();
+      keys[k] = true;
+      if (mode === 'race' && ['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].indexOf(k) !== -1) {
         e.preventDefault();
       }
     });
-    window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+    window.addEventListener('keyup', function (e) {
+      keys[e.key.toLowerCase()] = false;
+    });
 
-    let car = { x: 0, z: 0, angle: 0, speed: 0 };
-    let lap = 1;
-    let lapStart = 0;
-    let bestLap = null;
-    let halfwayReached = false;
-
-    function resetCar() {
-      const pts = sampleTrack(32);
-      if (pts.length < 4) return;
-      const p0 = pts[0];
-      const p1 = pts[1];
-      car.x = p0.x;
-      car.z = p0.z;
-      car.angle = Math.atan2(p1.x - p0.x, p1.z - p0.z);
-      car.speed = 0;
-      lap = 1;
-      lapStart = performance.now();
-      halfwayReached = false;
-      updateCurbVibration(false, 0);
-      document.getElementById('lap-num').textContent = '1';
-      document.getElementById('lap-time').textContent = '0.00s';
-    }
-
-    window.setMode = function (nextMode) {
-      if (nextMode === 'race' && points.length < 3) {
-        setBar('Plaats eerst minimaal 3 punten om te racen!');
-        return;
-      }
-      mode = nextMode;
-      draggingIndex = null;
-      const isRace = mode === 'race';
-
-      document.getElementById('editor-controls').style.display = isRace ? 'none' : 'block';
-      document.getElementById('race-controls').style.display = isRace ? 'block' : 'none';
-      document.getElementById('hud').classList.toggle('visible', isRace);
-      document.getElementById('status-text').innerHTML = isRace
-        ? 'Modus: <strong style="color:#fb7185">Racen</strong>'
-        : 'Modus: <strong style="color:#4ade80">Tekenen</strong>';
-
-      if (isRace) {
-        generateTrees(sampleTrack(32));
-        resetCar();
-        // Zet camera direct achter de wagen op de grond (rechtop!)
-        camTarget = { x: car.x + Math.sin(car.angle) * 16, y: 2.2, z: car.z + Math.cos(car.angle) * 16 };
-        camPos = { x: car.x - Math.sin(car.angle) * 48, y: 18, z: car.z - Math.cos(car.angle) * 48 };
-        setBar('WASD of Pijltjestoetsen om te rijden • R = Reset naar start');
-      } else {
-        updateCurbVibration(false, 0);
-        camTarget = { x: 0, y: 0, z: 0 };
-        camYaw = 0.65;
-        camPitch = 0.85;
-        camDist = 340;
-        camPos = {
-          x: camTarget.x + Math.sin(camYaw) * Math.cos(camPitch) * camDist,
-          y: camTarget.y + Math.sin(camPitch) * camDist,
-          z: camTarget.z + Math.cos(camYaw) * Math.cos(camPitch) * camDist
-        };
-        setBar('Sleep een punt of klik op "+ Bocht Toevoegen" en klik op het gras
+    var car = { x: 0, z: 0, angle: 0, speed: 0 };
+    var lap = 1;
+    var
