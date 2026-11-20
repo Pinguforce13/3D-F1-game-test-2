@@ -1,179 +1,615 @@
-import React, { useState, useRef } from 'react';
-import { Canvas, ThreeEvent } from '@react-three/fiber';
-import { OrbitControls, Grid, Environment } from '@react-three/drei';
-import { Trash2, RotateCcw, PlusCircle, Flag } from 'lucide-react';
-import { TrackMesh } from './components/TrackMesh';
-
-// Standaard start-circuit (een simpele oval/bocht)
-const DEFAULT_POINTS: [number, number, number][] = [
-  [-30, 0, -25],
-  [30, 0, -25],
-  [45, 0, 0],
-  [25, 0, 30],
-  [-10, 0, 15],
-  [-40, 0, 25],
-];
-
-export function App() {
-  const [points, setPoints] = useState<[number, number, number][]>(DEFAULT_POINTS);
-  const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
-  const [isAddMode, setIsAddMode] = useState<boolean>(false);
-  const controlsRef = useRef<any>(null);
-
-  // Nieuwe bocht plaatsen bij klik op het gras
-  const handleGroundClick = (e: ThreeEvent<MouseEvent>) => {
-    if (!isAddMode || draggingIndex !== null) return;
-    e.stopPropagation();
-    const { x, z } = e.point;
-    setPoints((prev) => [...prev, [Math.round(x), 0, Math.round(z)]]);
-  };
-
-  // Punt verslepen over het grondvlak
-  const handleGroundMove = (e: ThreeEvent<PointerEvent>) => {
-    if (draggingIndex === null) return;
-    e.stopPropagation();
-    const { x, z } = e.point;
-    setPoints((prev) =>
-      prev.map((pt, idx) => (idx === draggingIndex ? [x, 0, z] : pt))
-    );
-  };
-
-  const handlePointerUp = () => {
-    if (draggingIndex !== null) {
-      setDraggingIndex(null);
-      if (controlsRef.current) controlsRef.current.enabled = true;
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>3D F1 Circuit & Racer</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #090d16;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      color: #f8fafc;
     }
-  };
+    #canvas-container {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+    }
+    .panel {
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      width: 310px;
+      background: rgba(15, 23, 42, 0.92);
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      border-radius: 14px;
+      padding: 16px;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+      z-index: 20;
+    }
+    .title-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    .badge {
+      background: #e11d48;
+      color: #fff;
+      font-weight: 800;
+      font-size: 12px;
+      padding: 3px 8px;
+      border-radius: 6px;
+    }
+    h1 { font-size: 17px; font-weight: 700; }
+    .hint {
+      font-size: 12px;
+      color: #cbd5e1;
+      line-height: 1.45;
+      margin-bottom: 14px;
+    }
+    .btn-group { display: flex; flex-direction: column; gap: 8px; }
+    .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    button {
+      border: none;
+      border-radius: 9px;
+      padding: 10px 12px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      color: #fff;
+    }
+    button:active { transform: scale(0.98); }
+    .btn-primary { background: #16a34a; }
+    .btn-primary.active { background: #f59e0b; color: #0f172a; }
+    .btn-race { background: #e11d48; padding: 12px; font-size: 14px; }
+    .btn-edit { background: #2563eb; padding: 12px; font-size: 14px; }
+    .btn-secondary { background: #1e293b; color: #e2e8f0; border: 1px solid rgba(148, 163, 184, 0.2); }
+    .stats {
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px solid rgba(148, 163, 184, 0.15);
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+      color: #94a3b8;
+    }
+    .stats strong { color: #f8fafc; }
+    .hud {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      background: rgba(15, 23, 42, 0.92);
+      border: 1px solid rgba(148, 163, 184, 0.25);
+      border-radius: 14px;
+      padding: 16px 20px;
+      min-width: 210px;
+      text-align: right;
+      display: none;
+      z-index: 20;
+    }
+    .hud.visible { display: block; }
+    .speed { font-size: 34px; font-weight: 800; line-height: 1; }
+    .speed span { font-size: 13px; color: #94a3b8; margin-left: 4px; }
+    .lap-info { margin-top: 10px; font-size: 13px; color: #cbd5e1; }
+    .best-lap { margin-top: 4px; font-size: 12px; color: #34d399; }
+    .controls-bar {
+      position: fixed;
+      bottom: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(15, 23, 42, 0.88);
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      padding: 8px 16px;
+      border-radius: 999px;
+      font-size: 12px;
+      color: #e2e8f0;
+      z-index: 20;
+      white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+  <div id="canvas-container"></div>
 
-  const removePoint = (index: number) => {
-    if (points.length <= 3) return; // Minimaal 3 punten nodig voor een gesloten baan
-    setPoints((prev) => prev.filter((_, idx) => idx !== index));
-  };
+  <div class="panel">
+    <div class="title-row">
+      <span class="badge">F1 3D</span>
+      <h1>Circuit & Race Studio</h1>
+    </div>
 
-  return (
-    <div className="relative w-full h-full font-sans text-white">
-      {/* 3D Canvas */}
-      <Canvas
-        shadows
-        camera={{ position: [0, 75, 75], fov: 45 }}
-        onPointerUp={handlePointerUp}
-      >
-        <color attach="background" args={['#0b1120']} />
-        <ambientLight intensity={0.6} />
-        <directionalLight
-          position={[50, 80, 30]}
-          intensity={1.5}
-          castShadow
-          shadow-mapSize={[2048, 2048]}
-        />
-        <Environment preset="city" />
-
-        {/* Grondvlak (Gras) */}
-        <mesh
-          rotation={[-Math.PI / 2, 0, 0]}
-          position={[0, -0.01, 0]}
-          receiveShadow
-          onClick={handleGroundClick}
-          onPointerMove={handleGroundMove}
-        >
-          <planeGeometry args={[300, 300]} />
-          <meshStandardMaterial color="#14532d" roughness={0.9} />
-        </mesh>
-
-        {/* Hulpraster */}
-        <Grid
-          args={[300, 300]}
-          cellSize={5}
-          cellThickness={0.5}
-          cellColor="#166534"
-          sectionSize={25}
-          sectionThickness={1}
-          sectionColor="#22c55e"
-          fadeDistance={150}
-          position={[0, 0.01, 0]}
-        />
-
-        {/* De Gegenereerde 3D Racebaan */}
-        <TrackMesh points={points} />
-
-        {/* Versleepbare Controlepunten (Nodes) */}
-        {points.map((pos, idx) => (
-          <group key={idx} position={[pos[0], 0.8, pos[2]]}>
-            <mesh
-              onPointerDown={(e) => {
-                e.stopPropagation();
-                setDraggingIndex(idx);
-                if (controlsRef.current) controlsRef.current.enabled = false;
-              }}
-              onDoubleClick={(e) => {
-                e.stopPropagation();
-                removePoint(idx);
-              }}
-            >
-              <sphereGeometry args={[1.4, 16, 16]} />
-              <meshStandardMaterial
-                color={idx === 0 ? '#22c55e' : draggingIndex === idx ? '#facc15' : '#ef4444'}
-                emissive={draggingIndex === idx ? '#facc15' : '#000000'}
-                emissiveIntensity={0.5}
-              />
-            </mesh>
-          </group>
-        ))}
-
-        <OrbitControls
-          ref={controlsRef}
-          maxPolarAngle={Math.PI / 2.2}
-          minDistance={20}
-          maxDistance={180}
-        />
-      </Canvas>
-
-      {/* HUD / Interface */}
-      <div className="absolute top-4 left-4 bg-slate-900/90 backdrop-blur-md border border-slate-700 p-4 rounded-xl shadow-2xl w-80">
-        <div className="flex items-center gap-2 mb-2">
-          <Flag className="text-red-500 w-6 h-6" />
-          <h1 className="text-lg font-bold tracking-wider uppercase">F1 Track Architect</h1>
+    <div id="editor-controls">
+      <p class="hint">
+        • <b>Sleep</b> de bollen om bochten te vormen.<br/>
+        • Klik op <b>+ Bocht Toevoegen</b> en klik daarna op het gras.<br/>
+        • <b>Rechtermuis</b> draait camera, <b>scroll</b> zoomt.
+      </p>
+      <div class="btn-group">
+        <button type="button" id="btn-add" class="btn-primary">+ Bocht Toevoegen (UIT)</button>
+        <div class="row-2">
+          <button type="button" id="btn-reset" class="btn-secondary">Reset Baan</button>
+          <button type="button" id="btn-save" class="btn-secondary">Bewaar Baan</button>
         </div>
-        <p className="text-xs text-slate-400 mb-4">
-          Sleep de rode bollen om bochten te vormen. Dubbelklik op een bol om hem te verwijderen.
-        </p>
-
-        <div className="flex flex-col gap-2">
-          <button
-            onClick={() => setIsAddMode(!isAddMode)}
-            className={`flex items-center justify-center gap-2 py-2.5 px-4 rounded-lg font-semibold text-sm transition ${
-              isAddMode
-                ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-600/30'
-                : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
-            }`}
-          >
-            <PlusCircle className="w-4 h-4" />
-            {isAddMode ? 'Klik op het gras om bocht te plaatsen...' : 'Bochten Toevoegen (Aan/Uit)'}
-          </button>
-
-          <div className="flex gap-2 mt-1">
-            <button
-              onClick={() => setPoints(DEFAULT_POINTS)}
-              className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs font-medium text-slate-300 transition"
-            >
-              <RotateCcw className="w-3.5 h-3.5" /> Reset Baan
-            </button>
-            <button
-              onClick={() => setPoints(points.slice(0, 3))}
-              className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 bg-red-950/60 hover:bg-red-900/80 border border-red-800/50 rounded-lg text-xs font-medium text-red-300 transition"
-            >
-              <Trash2 className="w-3.5 h-3.5" /> Wis Extra's
-            </button>
-          </div>
-        </div>
-
-        <div className="mt-4 pt-3 border-t border-slate-800 flex justify-between text-xs text-slate-400">
-          <span>Bochten: <strong className="text-white">{points.length}</strong></span>
-          <span>Status: <strong className="text-emerald-400">Gereed voor Fase 2</strong></span>
-        </div>
+        <button type="button" id="btn-race" class="btn-race">▶ Start Race</button>
       </div>
     </div>
-  );
-}
 
-export default App;
+    <div id="race-controls" style="display: none;">
+      <p class="hint">
+        • <b>W / ↑</b> Gas geven<br/>
+        • <b>S / ↓</b> Remmen / Achteruit<br/>
+        • <b>A / D</b> of <b>← / →</b> Sturen<br/>
+        • <b>R</b> Terug naar startlijn
+      </p>
+      <div class="btn-group">
+        <button type="button" id="btn-edit" class="btn-edit">✎ Terug naar Tekenen</button>
+      </div>
+    </div>
+
+    <div class="stats">
+      <span>Bochten: <strong id="node-count">6</strong></span>
+      <span id="status-text">Modus: <strong style="color:#4ade80">Tekenen</strong></span>
+    </div>
+  </div>
+
+  <div id="hud" class="hud">
+    <div class="speed"><span id="speed-val">0</span><span>KM/H</span></div>
+    <div class="lap-info">Ronde: <strong id="lap-num">1</strong> | Tijd: <strong id="lap-time">0.00s</strong></div>
+    <div class="best-lap">Beste ronde: <strong id="best-time">--</strong></div>
+  </div>
+
+  <div class="controls-bar" id="bottom-bar">
+    Sleep een bol of klik op "+ Bocht Toevoegen" en klik op het gras!
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+  <script>
+    (function () {
+      if (!window.THREE) {
+        document.getElementById('bottom-bar').textContent = 'Geen verbinding met 3D-bibliotheek (controleer internet).';
+        return;
+      }
+
+      const DEFAULT_POINTS = [
+        [-32, 0, -26],
+        [28, 0, -26],
+        [44, 0, -2],
+        [26, 0, 28],
+        [-8, 0, 14],
+        [-38, 0, 26],
+      ];
+      const STORAGE_KEY = 'f1_custom_track_v3';
+
+      function loadPoints() {
+        try {
+          const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+          if (Array.isArray(saved) && saved.length >= 3) return saved;
+        } catch (_) {}
+        return DEFAULT_POINTS.map((p) => p.slice());
+      }
+
+      let points = loadPoints();
+      let mode = 'edit';
+      let addMode = false;
+      let draggingIndex = null;
+      let dragStart = { x: 0, y: 0 };
+      let movedWhileDragging = false;
+      let lastClick = { idx: -1, time: 0 };
+
+      const container = document.getElementById('canvas-container');
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color('#090d16');
+      scene.fog = new THREE.FogExp2('#090d16', 0.0038);
+
+      const camera = new THREE.PerspectiveCamera(52, window.innerWidth / window.innerHeight, 0.2, 600);
+      camera.position.set(0, 82, 82);
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.shadowMap.enabled = true;
+      container.appendChild(renderer.domElement);
+
+      const orbit = new THREE.OrbitControls(camera, renderer.domElement);
+      orbit.maxPolarAngle = Math.PI / 2.15;
+      orbit.minDistance = 12;
+      orbit.maxDistance = 200;
+      orbit.enableDamping = true;
+
+      scene.add(new THREE.AmbientLight(0xffffff, 0.75));
+      const dirLight = new THREE.DirectionalLight(0xfff7ed, 1.5);
+      dirLight.position.set(55, 85, 35);
+      dirLight.castShadow = true;
+      scene.add(dirLight);
+
+      const ground = new THREE.Mesh(
+        new THREE.PlaneGeometry(450, 450),
+        new THREE.MeshStandardMaterial({ color: 0x14532d, roughness: 0.92 })
+      );
+      ground.rotation.x = -Math.PI / 2;
+      ground.position.y = -0.02;
+      ground.receiveShadow = true;
+      scene.add(ground);
+
+      const grid = new THREE.GridHelper(320, 64, 0x22c55e, 0x166534);
+      grid.position.y = 0.01;
+      scene.add(grid);
+
+      const curbCanvas = document.createElement('canvas');
+      curbCanvas.width = 64;
+      curbCanvas.height = 64;
+      const cctx = curbCanvas.getContext('2d');
+      cctx.fillStyle = '#ef4444';
+      cctx.fillRect(0, 0, 64, 32);
+      cctx.fillStyle = '#ffffff';
+      cctx.fillRect(0, 32, 64, 32);
+      const curbTex = new THREE.CanvasTexture(curbCanvas);
+      curbTex.wrapS = THREE.RepeatWrapping;
+      curbTex.wrapT = THREE.RepeatWrapping;
+
+      const trackGroup = new THREE.Group();
+      const nodesGroup = new THREE.Group();
+      scene.add(trackGroup);
+      scene.add(nodesGroup);
+
+      let currentCurve = null;
+      const ROAD_WIDTH = 11;
+
+      function buildRibbon(curve, width, yOffset, divisions = 300) {
+        const positions = [];
+        const uvs = [];
+        const indices = [];
+
+        for (let i = 0; i <= divisions; i++) {
+          const t = i / divisions;
+          const pt = curve.getPointAt(t);
+          const tangent = curve.getTangentAt(t).normalize();
+          const normal = new THREE.Vector3(-tangent.z, 0, tangent.x).normalize();
+
+          const left = pt.clone().addScaledVector(normal, -width / 2);
+          const right = pt.clone().addScaledVector(normal, width / 2);
+
+          positions.push(left.x, left.y + yOffset, left.z);
+          positions.push(right.x, right.y + yOffset, right.z);
+
+          uvs.push(0, t * 70);
+          uvs.push(1, t * 70);
+
+          if (i < divisions) {
+            const base = i * 2;
+            indices.push(base, base + 1, base + 2);
+            indices.push(base + 1, base + 3, base + 2);
+          }
+        }
+
+        const geom = new THREE.BufferGeometry();
+        geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        geom.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+        geom.setIndex(indices);
+        geom.computeVertexNormals();
+        return geom;
+      }
+
+      function rebuildTrack() {
+        while (trackGroup.children.length > 0) {
+          const c = trackGroup.children[0];
+          if (c.geometry) c.geometry.dispose();
+          trackGroup.remove(c);
+        }
+        while (nodesGroup.children.length > 0) {
+          const c = nodesGroup.children[0];
+          if (c.geometry) c.geometry.dispose();
+          nodesGroup.remove(c);
+        }
+
+        document.getElementById('node-count').textContent = points.length;
+
+        points.forEach((p, idx) => {
+          const color = idx === 0 ? 0x22c55e : draggingIndex === idx ? 0xfacc15 : 0xef4444;
+          const mesh = new THREE.Mesh(
+            new THREE.SphereGeometry(1.7, 16, 16),
+            new THREE.MeshStandardMaterial({ color, roughness: 0.4 })
+          );
+          mesh.position.set(p[0], 1.0, p[2]);
+          mesh.userData = { nodeIndex: idx };
+          mesh.castShadow = true;
+          nodesGroup.add(mesh);
+        });
+
+        if (points.length < 3) {
+          currentCurve = null;
+          return;
+        }
+
+        const vectors = points.map((p) => new THREE.Vector3(p[0], 0, p[2]));
+        const curve = new THREE.CatmullRomCurve3(vectors, true, 'catmullrom', 0.5);
+        currentCurve = curve;
+
+        const curbMesh = new THREE.Mesh(
+          buildRibbon(curve, ROAD_WIDTH + 1.6, 0.02),
+          new THREE.MeshStandardMaterial({ map: curbTex, roughness: 0.8 })
+        );
+        curbMesh.receiveShadow = true;
+        trackGroup.add(curbMesh);
+
+        const roadMesh = new THREE.Mesh(
+          buildRibbon(curve, ROAD_WIDTH, 0.05),
+          new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.68 })
+        );
+        roadMesh.receiveShadow = true;
+        trackGroup.add(roadMesh);
+
+        const startPt = curve.getPointAt(0);
+        const startTan = curve.getTangentAt(0);
+        const angle = Math.atan2(startTan.x, startTan.z);
+
+        const finishMesh = new THREE.Mesh(
+          new THREE.PlaneGeometry(ROAD_WIDTH, 2.4),
+          new THREE.MeshStandardMaterial({ color: 0xf8fafc })
+        );
+        finishMesh.rotation.x = -Math.PI / 2;
+        finishMesh.rotation.z = angle;
+        finishMesh.position.set(startPt.x, 0.08, startPt.z);
+        finishMesh.receiveShadow = true;
+        trackGroup.add(finishMesh);
+      }
+
+      function createF1Car() {
+        const car = new THREE.Group();
+        const bodyRed = new THREE.MeshStandardMaterial({ color: 0xe11d48, roughness: 0.3, metalness: 0.3 });
+        const carbonDark = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.5 });
+        const accentWhite = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.4 });
+        const tireMat = new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.85 });
+
+        const chassis = new THREE.Mesh(new THREE.BoxGeometry(1.35, 0.42, 4.1), bodyRed);
+        chassis.position.set(0, 0.42, 0);
+        chassis.castShadow = true;
+        car.add(chassis);
+
+        const nose = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.28, 1.5), bodyRed);
+        nose.position.set(0, 0.34, 2.55);
+        car.add(nose);
+
+        const cockpit = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.25, 1.1), carbonDark);
+        cockpit.position.set(0, 0.62, 0.15);
+        car.add(cockpit);
+
+        const frontWing = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.1, 0.55), accentWhite);
+        frontWing.position.set(0, 0.16, 3.15);
+        car.add(frontWing);
+
+        const rearWing = new THREE.Mesh(new THREE.BoxGeometry(1.75, 0.12, 0.48), bodyRed);
+        rearWing.position.set(0, 0.98, -1.95);
+        car.add(rearWing);
+
+        const wheelGeo = new THREE.CylinderGeometry(0.38, 0.38, 0.36, 16);
+        wheelGeo.rotateZ(Math.PI / 2);
+        [
+          [-1.02, 0.38, 1.95],
+          [ 1.02, 0.38, 1.95],
+          [-1.08, 0.40, -1.45],
+          [ 1.08, 0.40, -1.45],
+        ].forEach(([x, y, z]) => {
+          const w = new THREE.Mesh(wheelGeo, tireMat);
+          w.position.set(x, y, z);
+          car.add(w);
+        });
+
+        return car;
+      }
+
+      const f1Car = createF1Car();
+      f1Car.visible = false;
+      scene.add(f1Car);
+
+      const raycaster = new THREE.Raycaster();
+      const pointer = new THREE.Vector2();
+
+      function updatePointer(e) {
+        const rect = renderer.domElement.getBoundingClientRect();
+        pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+        pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      }
+
+      function intersectGround() {
+        raycaster.setFromCamera(pointer, camera);
+        const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+        const hit = new THREE.Vector3();
+        return raycaster.ray.intersectPlane(plane, hit) ? hit : null;
+      }
+
+      renderer.domElement.addEventListener('pointerdown', (e) => {
+        if (mode !== 'edit' || e.button !== 0) return;
+        updatePointer(e);
+        raycaster.setFromCamera(pointer, camera);
+
+        dragStart = { x: e.clientX, y: e.clientY };
+        movedWhileDragging = false;
+
+        const hits = raycaster.intersectObjects(nodesGroup.children, false);
+        if (hits.length > 0) {
+          draggingIndex = hits[0].object.userData.nodeIndex;
+          orbit.enabled = false;
+          rebuildTrack();
+          return;
+        }
+
+        if (addMode) {
+          const pt = intersectGround();
+          if (pt) {
+            points.push([
+              Math.max(-140, Math.min(140, Math.round(pt.x))),
+              0,
+              Math.max(-140, Math.min(140, Math.round(pt.z)))
+            ]);
+            rebuildTrack();
+          }
+        }
+      });
+
+      renderer.domElement.addEventListener('pointermove', (e) => {
+        if (mode !== 'edit' || draggingIndex === null) return;
+        if (Math.hypot(e.clientX - dragStart.x, e.clientY - dragStart.y) > 4) {
+          movedWhileDragging = true;
+        }
+        updatePointer(e);
+        const pt = intersectGround();
+        if (pt) {
+          points[draggingIndex] = [
+            Math.max(-140, Math.min(140, pt.x)),
+            0,
+            Math.max(-140, Math.min(140, pt.z))
+          ];
+          rebuildTrack();
+        }
+      });
+
+      function stopDragging() {
+        if (draggingIndex !== null) {
+          const finishedIdx = draggingIndex;
+          draggingIndex = null;
+          orbit.enabled = mode === 'edit';
+          rebuildTrack();
+
+          if (!movedWhileDragging && points.length > 3) {
+            const now = Date.now();
+            if (lastClick.idx === finishedIdx && now - lastClick.time < 380) {
+              points.splice(finishedIdx, 1);
+              rebuildTrack();
+              lastClick = { idx: -1, time: 0 };
+            } else {
+              lastClick = { idx: finishedIdx, time: now };
+            }
+          }
+        }
+      }
+
+      window.addEventListener('pointerup', stopDragging);
+      window.addEventListener('pointercancel', stopDragging);
+
+      const keys = {};
+      window.addEventListener('keydown', (e) => {
+        keys[e.key.toLowerCase()] = true;
+        if (mode === 'race' && ['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(e.key.toLowerCase())) {
+          e.preventDefault();
+        }
+      });
+      window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+
+      let carPos = new THREE.Vector3();
+      let carHeading = 0;
+      let carSpeed = 0;
+      let lap = 1;
+      let lapStartTime = 0;
+      let bestLapTime = null;
+      let passedHalfway = false;
+
+      function resetCar() {
+        if (!currentCurve) return;
+        const startPt = currentCurve.getPointAt(0);
+        const tan = currentCurve.getTangentAt(0).normalize();
+        carPos.set(startPt.x, 0.05, startPt.z);
+        carHeading = Math.atan2(tan.x, tan.z);
+        carSpeed = 0;
+        lap = 1;
+        lapStartTime = performance.now();
+        passedHalfway = false;
+        document.getElementById('lap-num').textContent = '1';
+        document.getElementById('lap-time').textContent = '0.00s';
+      }
+
+      function setMode(nextMode) {
+        if (nextMode === 'race' && !currentCurve) {
+          document.getElementById('bottom-bar').textContent = 'Plaats eerst minimaal 3 bochten!';
+          return;
+        }
+        mode = nextMode;
+        draggingIndex = null;
+        const isRace = mode === 'race';
+
+        document.getElementById('editor-controls').style.display = isRace ? 'none' : 'block';
+        document.getElementById('race-controls').style.display = isRace ? 'block' : 'none';
+        document.getElementById('hud').classList.toggle('visible', isRace);
+        document.getElementById('status-text').innerHTML = isRace
+          ? 'Modus: <strong style="color:#fb7185">Racen</strong>'
+          : 'Modus: <strong style="color:#4ade80">Tekenen</strong>';
+
+        nodesGroup.visible = !isRace;
+        grid.visible = !isRace;
+        f1Car.visible = isRace;
+        orbit.enabled = !isRace;
+
+        if (isRace) {
+          resetCar();
+          document.getElementById('bottom-bar').textContent = 'WASD of Pijltjestoetsen om te rijden • R = Reset';
+        } else {
+          camera.position.set(0, 82, 82);
+          orbit.target.set(0, 0, 0);
+          document.getElementById('bottom-bar').textContent = 'Sleep een bol of klik op "+ Bocht Toevoegen" en klik op het gras!';
+        }
+      }
+
+      const btnAdd = document.getElementById('btn-add');
+      btnAdd.addEventListener('click', () => {
+        addMode = !addMode;
+        btnAdd.classList.toggle('active', addMode);
+        btnAdd.textContent = addMode ? '+ Bocht Toevoegen (AAN - klik op gras)' : '+ Bocht Toevoegen (UIT)';
+      });
+
+      document.getElementById('btn-reset').addEventListener('click', () => {
+        points = DEFAULT_POINTS.map((p) => p.slice());
+        rebuildTrack();
+        document.getElementById('bottom-bar').textContent = 'Baan gereset.';
+      });
+
+      document.getElementById('btn-save').addEventListener('click', () => {
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(points));
+          document.getElementById('bottom-bar').textContent = 'Baan bewaard!';
+        } catch (_) {}
+      });
+
+      document.getElementById('btn-race').addEventListener('click', () => setMode('race'));
+      document.getElementById('btn-edit').addEventListener('click', () => setMode('edit'));
+
+      let lastTime = performance.now();
+      function animate(now) {
+        requestAnimationFrame(animate);
+        const dt = Math.min((now - lastTime) / 1000, 0.05);
+        lastTime = now;
+
+        if (mode === 'race' && currentCurve) {
+          if (keys['r']) resetCar();
+
+          const forward = keys['w'] || keys['arrowup'];
+          const backward = keys['s'] || keys['arrowdown'];
+          const left = keys['a'] || keys['arrowleft'];
+          const right = keys['d'] || keys['arrowright'];
+
+          let closestT = 0;
+          let minDistSq = Infinity;
+          for (let i = 0; i < 160; i++) {
+            const t = i / 160;
+            const pt = currentCurve.getPointAt(t);
+            const dx = pt.x - carPos.x;
+            const dz = pt.z - carPos.z;
+            const dSq = dx * dx + dz * dz;
+            if (dSq < minDistSq) {
+              minDistSq = dSq;
+              closestT = t;
+            }
+          }
+          const onRoad = Math.sqrt(minDistSq) <= (ROAD_WIDTH / 2 + 1.2);
+          const maxSpeed = onRoad ? 62 : 28;
+          const accel = onRoad ? 44 : 22;
+
+          if (forward) carSpeed += accel * dt;
+          else if (backward) carSpeed -= 36 * dt;
+          else carSpeed *= Math.pow(0.25, dt);
