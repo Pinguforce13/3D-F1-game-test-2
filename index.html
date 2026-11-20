@@ -14,11 +14,12 @@
       font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
       color: #f8fafc;
     }
-    #canvas-container {
+    #game-canvas {
       position: fixed;
       inset: 0;
       width: 100%;
       height: 100%;
+      display: block;
       z-index: 1;
     }
     .panel {
@@ -32,7 +33,6 @@
       padding: 16px;
       box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
       z-index: 100;
-      pointer-events: auto;
     }
     .title-row {
       display: flex;
@@ -65,7 +65,6 @@
       font-weight: 700;
       cursor: pointer;
       color: #fff;
-      pointer-events: auto;
     }
     button:active { transform: scale(0.97); }
     .btn-primary { background: #16a34a; }
@@ -118,7 +117,7 @@
   </style>
 </head>
 <body>
-  <div id="canvas-container"></div>
+  <canvas id="game-canvas"></canvas>
 
   <div class="panel">
     <div class="title-row">
@@ -128,17 +127,17 @@
 
     <div id="editor-controls">
       <p class="hint">
-        • <b>Sleep</b> de bollen om bochten te vormen.<br/>
+        • <b>Sleep</b> de rode/groene punten om je circuit te vormen.<br/>
         • Klik op <b>+ Bocht Toevoegen</b> en klik op het gras.<br/>
-        • <b>Rechtermuis</b> draait camera, <b>scroll</b> zoomt.
+        • <b>Rechtermuis</b> of <b>Shift + Sleep</b> draait de 3D-camera.
       </p>
       <div class="btn-group">
-        <button type="button" id="btn-add" class="btn-primary" onclick="window.toggleAddMode()">+ Bocht Toevoegen (UIT)</button>
+        <button type="button" id="btn-add" class="btn-primary" onclick="toggleAdd()">+ Bocht Toevoegen (UIT)</button>
         <div class="row-2">
-          <button type="button" id="btn-reset" class="btn-secondary" onclick="window.resetTrackPoints()">Reset Baan</button>
-          <button type="button" id="btn-save" class="btn-secondary" onclick="window.saveTrackPoints()">Bewaar Baan</button>
+          <button type="button" id="btn-reset" class="btn-secondary" onclick="resetTrack()">Reset Baan</button>
+          <button type="button" id="btn-save" class="btn-secondary" onclick="saveTrack()">Bewaar Baan</button>
         </div>
-        <button type="button" id="btn-race" class="btn-race" onclick="window.switchMode('race')">▶ Start Race</button>
+        <button type="button" id="btn-race" class="btn-race" onclick="setMode('race')">▶ Start Race</button>
       </div>
     </div>
 
@@ -150,7 +149,7 @@
         • <b>R</b> Terug naar startlijn
       </p>
       <div class="btn-group">
-        <button type="button" id="btn-edit" class="btn-edit" onclick="window.switchMode('edit')">✎ Terug naar Tekenen</button>
+        <button type="button" id="btn-edit" class="btn-edit" onclick="setMode('edit')">✎ Terug naar Tekenen</button>
       </div>
     </div>
 
@@ -167,119 +166,590 @@
   </div>
 
   <div class="controls-bar" id="bottom-bar">
-    3D Engine laden...
+    Klaar! Sleep een punt of klik op "+ Bocht Toevoegen" en klik op het gras.
   </div>
 
   <script>
-    // State & knoppen direct beschikbaar maken (werkt altijd, zelfs tijdens laden)
     const DEFAULT_POINTS = [
-      [-32, 0, -26],
-      [28, 0, -26],
-      [44, 0, -2],
-      [26, 0, 28],
-      [-8, 0, 14],
-      [-38, 0, 26],
+      [-90, -70],
+      [80, -70],
+      [125, -5],
+      [75, 80],
+      [-20, 40],
+      [-110, 75],
     ];
-    const STORAGE_KEY = 'f1_custom_track_v4';
+    const STORAGE_KEY = 'f1_3d_custom_track_v5';
 
     function loadPoints() {
       try {
-        const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
-        if (Array.isArray(saved) && saved.length >= 3) return saved;
+        const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+        if (Array.isArray(raw) && raw.length >= 3) return raw;
       } catch (_) {}
-      return DEFAULT_POINTS.map((p) => p.slice());
+      return DEFAULT_POINTS.map(p => [p[0], p[1]]);
     }
 
-    window.gameState = {
-      points: loadPoints(),
-      mode: 'edit',
-      addMode: false,
-      ready: false,
-      rebuild: null,
-      setMode: null
-    };
+    let points = loadPoints();
+    let mode = 'edit'; // 'edit' | 'race'
+    let addMode = false;
+    let draggingIndex = null;
+    let rotatingCam = false;
+    let lastMouse = { x: 0, y: 0 };
 
-    function setBar(msg) {
-      document.getElementById('bottom-bar').textContent = msg;
+    // 3D Camera state
+    let camYaw = 0.65;
+    let camPitch = 0.85; // 0 = plat, PI/2 = recht van boven
+    let camDist = 290;
+    let camTarget = { x: 0, y: 0, z: 0 };
+
+    const canvas = document.getElementById('game-canvas');
+    const ctx = canvas.getContext('2d');
+
+    function setBar(text) {
+      document.getElementById('bottom-bar').textContent = text;
     }
 
-    window.toggleAddMode = function () {
-      window.gameState.addMode = !window.gameState.addMode;
+    function updateNodeCount() {
+      document.getElementById('node-count').textContent = String(points.length);
+    }
+
+    window.toggleAdd = function () {
+      addMode = !addMode;
       const btn = document.getElementById('btn-add');
-      btn.classList.toggle('active', window.gameState.addMode);
-      btn.textContent = window.gameState.addMode
-        ? '+ Bocht Toevoegen (AAN - klik op gras)'
-        : '+ Bocht Toevoegen (UIT)';
-      setBar(window.gameState.addMode
-        ? 'Klik ergens op het groene gras om een nieuwe bocht te plaatsen!'
-        : 'Sleep de bollen om bochten te verplaatsen.');
+      btn.classList.toggle('active', addMode);
+      btn.textContent = addMode ? '+ Bocht Toevoegen (AAN - klik op gras)' : '+ Bocht Toevoegen (UIT)';
+      setBar(addMode ? 'Klik ergens op het groene gras om een punt te plaatsen!' : 'Sleep de gekleurde punten om je baan te vormen.');
     };
 
-    window.resetTrackPoints = function () {
-      window.gameState.points = DEFAULT_POINTS.map((p) => p.slice());
-      if (window.gameState.rebuild) window.gameState.rebuild();
-      setBar('Baan gereset naar standaard circuit!');
+    window.resetTrack = function () {
+      points = DEFAULT_POINTS.map(p => [p[0], p[1]]);
+      updateNodeCount();
+      setBar('Baan gereset naar standaard circuit.');
     };
 
-    window.saveTrackPoints = function () {
+    window.saveTrack = function () {
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(window.gameState.points));
-        setBar('Jouw circuit is bewaard in de browser!');
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(points));
+        setBar('Jouw baan is bewaard!');
       } catch (_) {
-        setBar('Opslaan gelukt voor deze sessie.');
+        setBar('Baan bewaard voor deze sessie.');
       }
     };
 
-    window.switchMode = function (nextMode) {
-      if (window.gameState.setMode) {
-        window.gameState.setMode(nextMode);
-      } else {
-        setBar('3D-wereld is nog aan het opstarten, wacht 1 seconde...');
-      }
-    };
-
-    // Laad Three.js met automatische fallback CDN
-    function loadScript(src) {
-      return new Promise((resolve, reject) => {
-        const s = document.createElement('script');
-        s.src = src;
-        s.onload = resolve;
-        s.onerror = reject;
-        document.head.appendChild(s);
-      });
+    // Catmull-Rom spline voor vloeiende bochten
+    function catmullRom(p0, p1, p2, p3, t) {
+      const t2 = t * t;
+      const t3 = t2 * t;
+      return {
+        x: 0.5 * ((2 * p1[0]) + (-p0[0] + p2[0]) * t + (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * t2 + (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * t3),
+        z: 0.5 * ((2 * p1[1]) + (-p0[1] + p2[1]) * t + (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2 + (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3)
+      };
     }
 
-    async function boot() {
-      try {
-        await loadScript('https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js');
-      } catch (_) {
-        try {
-          await loadScript('https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js');
-        } catch (err) {
-          setBar('Kan 3D-engine niet downloaden. Check je internetverbinding.');
+    function sampleTrack(samplesPerSeg = 28) {
+      const res = [];
+      const n = points.length;
+      if (n < 3) return res;
+      for (let i = 0; i < n; i++) {
+        const p0 = points[(i - 1 + n) % n];
+        const p1 = points[i];
+        const p2 = points[(i + 1) % n];
+        const p3 = points[(i + 2) % n];
+        for (let s = 0; s < samplesPerSeg; s++) {
+          res.push(catmullRom(p0, p1, p2, p3, s / samplesPerSeg));
+        }
+      }
+      return res;
+    }
+
+    // 3D projectie
+    function getCameraPos() {
+      const horiz = Math.cos(camPitch) * camDist;
+      return {
+        x: camTarget.x + Math.sin(camYaw) * horiz,
+        y: camTarget.y + Math.sin(camPitch) * camDist,
+        z: camTarget.z + Math.cos(camYaw) * horiz
+      };
+    }
+
+    function project3D(wx, wy, wz) {
+      const cPos = getCameraPos();
+      const dx = wx - cPos.x;
+      const dy = wy - cPos.y;
+      const dz = wz - cPos.z;
+
+      // Richting naar target
+      const fx = camTarget.x - cPos.x;
+      const fy = camTarget.y - cPos.y;
+      const fz = camTarget.z - cPos.z;
+      const fLen = Math.hypot(fx, fy, fz) || 1;
+      const fwd = { x: fx / fLen, y: fy / fLen, z: fz / fLen };
+
+      // Right vector (cross fwd x worldUp)
+      let rx = fwd.z;
+      let ry = 0;
+      let rz = -fwd.x;
+      const rLen = Math.hypot(rx, ry, rz) || 1;
+      rx /= rLen; ry /= rLen; rz /= rLen;
+
+      // Up vector (cross right x fwd)
+      const ux = ry * fwd.z - rz * fwd.y;
+      const uy = rz * fwd.x - rx * fwd.z;
+      const uz = rx * fwd.y - ry * fwd.x;
+
+      const camX = dx * rx + dy * ry + dz * rz;
+      const camY = dx * ux + dy * uy + dz * uz;
+      const camZ = dx * fwd.x + dy * fwd.y + dz * fwd.z;
+
+      if (camZ <= 2) return null;
+      const fov = Math.min(canvas.width, canvas.height) * 0.95;
+      const scale = fov / camZ;
+      return {
+        x: canvas.width * 0.5 + camX * scale,
+        y: canvas.height * 0.5 - camY * scale,
+        scale: scale,
+        depth: camZ
+      };
+    }
+
+    // Raycast schermklik -> grondvlak (y = 0)
+    function screenToGround(sx, sy) {
+      const cPos = getCameraPos();
+      const fov = Math.min(canvas.width, canvas.height) * 0.95;
+      const nx = (sx - canvas.width * 0.5) / fov;
+      const ny = -(sy - canvas.height * 0.5) / fov;
+
+      const fx = camTarget.x - cPos.x;
+      const fy = camTarget.y - cPos.y;
+      const fz = camTarget.z - cPos.z;
+      const fLen = Math.hypot(fx, fy, fz) || 1;
+      const fwd = { x: fx / fLen, y: fy / fLen, z: fz / fLen };
+
+      let rx = fwd.z, ry = 0, rz = -fwd.x;
+      const rLen = Math.hypot(rx, ry, rz) || 1;
+      rx /= rLen; rz /= rLen;
+
+      const ux = ry * fwd.z - rz * fwd.y;
+      const uy = rz * fwd.x - rx * fwd.z;
+      const uz = rx * fwd.y - ry * fwd.x;
+
+      const dirX = fwd.x + nx * rx + ny * ux;
+      const dirY = fwd.y + nx * ry + ny * uy;
+      const dirZ = fwd.z + nx * rz + ny * uz;
+
+      if (Math.abs(dirY) < 0.0001) return null;
+      const t = -cPos.y / dirY;
+      if (t <= 0) return null;
+      return { x: cPos.x + dirX * t, z: cPos.z + dirZ * t };
+    }
+
+    // Race state
+    const keys = {};
+    window.addEventListener('keydown', (e) => {
+      keys[e.key.toLowerCase()] = true;
+      if (mode === 'race' && ['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(e.key.toLowerCase())) {
+        e.preventDefault();
+      }
+    });
+    window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+
+    let car = { x: 0, z: 0, angle: 0, speed: 0, wheelSteer: 0 };
+    let lap = 1;
+    let lapStart = 0;
+    let bestLap = null;
+    let halfwayReached = false;
+    const TRACK_HALF_WIDTH = 16;
+
+    function resetCar() {
+      const pts = sampleTrack(30);
+      if (pts.length < 4) return;
+      const p0 = pts[0];
+      const p1 = pts[1];
+      car.x = p0.x;
+      car.z = p0.z;
+      car.angle = Math.atan2(p1.x - p0.x, p1.z - p0.z);
+      car.speed = 0;
+      lap = 1;
+      lapStart = performance.now();
+      halfwayReached = false;
+      document.getElementById('lap-num').textContent = '1';
+      document.getElementById('lap-time').textContent = '0.00s';
+    }
+
+    window.setMode = function (nextMode) {
+      if (nextMode === 'race' && points.length < 3) {
+        setBar('Plaats eerst minimaal 3 punten om te racen!');
+        return;
+      }
+      mode = nextMode;
+      draggingIndex = null;
+      const isRace = mode === 'race';
+
+      document.getElementById('editor-controls').style.display = isRace ? 'none' : 'block';
+      document.getElementById('race-controls').style.display = isRace ? 'block' : 'none';
+      document.getElementById('hud').classList.toggle('visible', isRace);
+      document.getElementById('status-text').innerHTML = isRace
+        ? 'Modus: <strong style="color:#fb7185">Racen</strong>'
+        : 'Modus: <strong style="color:#4ade80">Tekenen</strong>';
+
+      if (isRace) {
+        resetCar();
+        setBar('WASD of Pijltjestoetsen om te rijden • R = Reset naar start');
+      } else {
+        camTarget = { x: 0, y: 0, z: 0 };
+        camYaw = 0.65;
+        camPitch = 0.85;
+        camDist = 290;
+        setBar('Sleep een punt of klik op "+ Bocht Toevoegen" en klik op het gras.');
+      }
+    };
+
+    // Muis interacties op canvas
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    canvas.addEventListener('mousedown', (e) => {
+      lastMouse = { x: e.clientX, y: e.clientY };
+
+      if (e.button === 2 || (e.button === 0 && e.shiftKey)) {
+        rotatingCam = true;
+        return;
+      }
+
+      if (mode !== 'edit' || e.button !== 0) return;
+
+      // Kijk of we op een bestaand controlepunt klikken
+      for (let i = 0; i < points.length; i++) {
+        const proj = project3D(points[i][0], 3, points[i][1]);
+        if (proj && Math.hypot(proj.x - e.clientX, proj.y - e.clientY) < 18) {
+          draggingIndex = i;
           return;
         }
       }
 
-      try {
-        await loadScript('https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js');
-      } catch (_) {
-        // OrbitControls optioneel: als hij faalt bouwen we een eigen simpele camera-draaier
+      if (addMode) {
+        const hit = screenToGround(e.clientX, e.clientY);
+        if (hit) {
+          points.push([
+            Math.max(-220, Math.min(220, Math.round(hit.x))),
+            Math.max(-220, Math.min(220, Math.round(hit.z)))
+          ]);
+          updateNodeCount();
+        }
+      }
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      const dx = e.clientX - lastMouse.x;
+      const dy = e.clientY - lastMouse.y;
+      lastMouse = { x: e.clientX, y: e.clientY };
+
+      if (rotatingCam) {
+        camYaw -= dx * 0.008;
+        camPitch = Math.max(0.22, Math.min(1.45, camPitch + dy * 0.007));
+        return;
       }
 
-      init3D();
+      if (mode === 'edit' && draggingIndex !== null) {
+        const hit = screenToGround(e.clientX, e.clientY);
+        if (hit) {
+          points[draggingIndex] = [
+            Math.max(-220, Math.min(220, hit.x)),
+            Math.max(-220, Math.min(220, hit.z))
+          ];
+        }
+      }
+    });
+
+    window.addEventListener('mouseup', () => {
+      draggingIndex = null;
+      rotatingCam = false;
+    });
+
+    canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      camDist = Math.max(95, Math.min(520, camDist + e.deltaY * 0.25));
+    }, { passive: false });
+
+    // Teken een 3D-doos (voor het F1-chassis, vleugels en wielen)
+    function draw3DBox(cx, cy, cz, w, h, d, yaw, fillColor, strokeColor) {
+      const cos = Math.cos(yaw);
+      const sin = Math.sin(yaw);
+      const hw = w * 0.5, hh = h * 0.5, hd = d * 0.5;
+
+      const corners = [
+        [-hw, -hh, -hd], [hw, -hh, -hd], [hw, -hh, hd], [-hw, -hh, hd],
+        [-hw,  hh, -hd], [hw,  hh, -hd], [hw,  hh, hd], [-hw,  hh, hd],
+      ].map(([lx, ly, lz]) => {
+        const rx = lx * cos + lz * sin;
+        const rz = -lx * sin + lz * cos;
+        return project3D(cx + rx, cy + ly, cz + rz);
+      });
+
+      if (corners.some(c => !c)) return;
+
+      const faces = [
+        [4, 5, 6, 7], // top
+        [0, 1, 5, 4], // side
+        [1, 2, 6, 5], // side
+        [2, 3, 7, 6], // side
+        [3, 0, 4, 7], // side
+      ];
+
+      ctx.fillStyle = fillColor;
+      ctx.strokeStyle = strokeColor || fillColor;
+      ctx.lineWidth = 1;
+
+      faces.forEach((f, idx) => {
+        ctx.beginPath();
+        f.forEach((cIdx, i) => {
+          const pt = corners[cIdx];
+          if (i === 0) ctx.moveTo(pt.x, pt.y);
+          else ctx.lineTo(pt.x, pt.y);
+        });
+        ctx.closePath();
+        if (idx === 0) ctx.fill();
+        else {
+          ctx.globalAlpha = 0.82;
+          ctx.fill();
+          ctx.globalAlpha = 1;
+        }
+        ctx.stroke();
+      });
     }
 
-    function init3D() {
-      const container = document.getElementById('canvas-container');
-      const scene = new THREE.Scene();
-      scene.background = new THREE.Color('#090d16');
-      scene.fog = new THREE.FogExp2('#090d16', 0.0038);
+    function draw3DF1Car() {
+      const cos = Math.cos(car.angle);
+      const sin = Math.sin(car.angle);
+      const toWorld = (lx, ly, lz) => ({
+        x: car.x + lx * cos + lz * sin,
+        y: ly,
+        z: car.z - lx * sin + lz * cos
+      });
 
-      const camera = new THREE.PerspectiveCamera(52, window.innerWidth / window.innerHeight, 0.2, 600);
-      camera.position.set(0, 82, 82);
-      camera.lookAt(0, 0, 0);
+      // Schaduw op de baan
+      const shadowPos = project3D(car.x, 0.1, car.z);
+      if (shadowPos) {
+        ctx.fillStyle = 'rgba(0,0,0,0.45)';
+        ctx.beginPath();
+        ctx.ellipse(shadowPos.x, shadowPos.y, 18 * shadowPos.scale * 3.5, 9 * shadowPos.scale * 3.5, car.angle, 0, Math.PI * 2);
+        ctx.fill();
+      }
 
-      const renderer = new THREE.WebGLRenderer({ antialias: true });
-      renderer.setSize(window.innerWidth, window.innerHeight);
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1,
+      // 4 Wielen
+      const wheels = [
+        [-4.2, 1.5,  6.5],
+        [ 4.2, 1.5,  6.5],
+        [-4.5, 1.6, -5.2],
+        [ 4.5, 1.6, -5.2],
+      ];
+      wheels.forEach(([wx, wy, wz]) => {
+        const wPos = toWorld(wx, wy, wz);
+        draw3DBox(wPos.x, wPos.y, wPos.z, 1.6, 3.0, 3.2, car.angle, '#111827', '#030712');
+      });
+
+      // Hoofdchassis + neus + voorvleugel + achtervleugel
+      const bodyPos = toWorld(0, 1.8, 0.4);
+      draw3DBox(bodyPos.x, bodyPos.y, bodyPos.z, 5.2, 1.6, 13.5, car.angle, '#e11d48', '#9f1239');
+
+      const nosePos = toWorld(0, 1.5, 8.8);
+      draw3DBox(nosePos.x, nosePos.y, nosePos.z, 2.4, 1.1, 4.5, car.angle, '#e11d48', '#881337');
+
+      const frontWingPos = toWorld(0, 0.8, 11.2);
+      draw3DBox(frontWingPos.x, frontWingPos.y, frontWingPos.z, 8.2, 0.45, 2.2, car.angle, '#f8fafc', '#cbd5e1');
+
+      const rearWingPos = toWorld(0, 3.8, -6.6);
+      draw3DBox(rearWingPos.x, rearWingPos.y, rearWingPos.z, 6.8, 0.55, 2.0, car.angle, '#e11d48', '#f8fafc');
+    }
+
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+    updateNodeCount();
+
+    let lastTime = performance.now();
+    function loop(now) {
+      requestAnimationFrame(loop);
+      const dt = Math.min((now - lastTime) / 1000, 0.05);
+      lastTime = now;
+
+      const trackSamples = sampleTrack(28);
+
+      if (mode === 'race' && trackSamples.length > 5) {
+        if (keys['r']) resetCar();
+
+        const gas = keys['w'] || keys['arrowup'];
+        const brake = keys['s'] || keys['arrowdown'];
+        const left = keys['a'] || keys['arrowleft'];
+        const right = keys['d'] || keys['arrowright'];
+
+        // Zoek dichtstbijzijnde punt op circuit
+        let bestIdx = 0;
+        let minD2 = Infinity;
+        for (let i = 0; i < trackSamples.length; i++) {
+          const dx = trackSamples[i].x - car.x;
+          const dz = trackSamples[i].z - car.z;
+          const d2 = dx * dx + dz * dz;
+          if (d2 < minD2) {
+            minD2 = d2;
+            bestIdx = i;
+          }
+        }
+
+        const dist = Math.sqrt(minD2);
+        const onRoad = dist <= TRACK_HALF_WIDTH + 3;
+        const maxSpeed = onRoad ? 165 : 75;
+        const accel = onRoad ? 120 : 60;
+
+        if (gas) car.speed += accel * dt;
+        else if (brake) car.speed -= 95 * dt;
+        else car.speed *= Math.pow(0.28, dt);
+
+        car.speed = Math.max(-45, Math.min(maxSpeed, car.speed));
+
+        if (Math.abs(car.speed) > 2) {
+          const steer = (left ? 1 : 0) - (right ? 1 : 0);
+          const dir = car.speed >= 0 ? 1 : -1;
+          car.angle += steer * 2.25 * dir * dt;
+        }
+
+        car.x += Math.sin(car.angle) * car.speed * dt;
+        car.z += Math.cos(car.angle) * car.speed * dt;
+
+        // Ronde-detectie
+        const progress = bestIdx / trackSamples.length;
+        if (progress > 0.45 && progress < 0.65) halfwayReached = true;
+        if (halfwayReached && progress < 0.07) {
+          const sec = (now - lapStart) / 1000;
+          if (bestLap === null || sec < bestLap) {
+            bestLap = sec;
+            document.getElementById('best-time').textContent = bestLap.toFixed(2) + 's';
+          }
+          lap += 1;
+          lapStart = now;
+          halfwayReached = false;
+          document.getElementById('lap-num').textContent = String(lap);
+        }
+
+        document.getElementById('lap-time').textContent = ((now - lapStart) / 1000).toFixed(2) + 's';
+        document.getElementById('speed-val').textContent = String(Math.round(Math.abs(car.speed) * 1.9));
+
+        // Chase camera achter auto
+        camTarget.x = car.x + Math.sin(car.angle) * 14;
+        camTarget.y = 2;
+        camTarget.z = car.z + Math.cos(car.angle) * 14;
+        camYaw = car.angle + Math.PI;
+        camPitch = 0.46;
+        camDist = 56;
+      }
+
+      // Achtergrond lucht/grond
+      const skyGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+      skyGrad.addColorStop(0, '#090d16');
+      skyGrad.addColorStop(0.55, '#111827');
+      skyGrad.addColorStop(1, '#14532d');
+      ctx.fillStyle = skyGrad;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Grondvlak & grid in 3D
+      const groundSpan = 260;
+      const step = 40;
+      ctx.strokeStyle = 'rgba(34, 197, 94, 0.22)';
+      ctx.lineWidth = 1;
+      for (let g = -groundSpan; g <= groundSpan; g += step) {
+        const a1 = project3D(g, 0, -groundSpan);
+        const a2 = project3D(g, 0, groundSpan);
+        if (a1 && a2) {
+          ctx.beginPath(); ctx.moveTo(a1.x, a1.y); ctx.lineTo(a2.x, a2.y); ctx.stroke();
+        }
+        const b1 = project3D(-groundSpan, 0, g);
+        const b2 = project3D(groundSpan, 0, g);
+        if (b1 && b2) {
+          ctx.beginPath(); ctx.moveTo(b1.x, b1.y); ctx.lineTo(b2.x, b2.y); ctx.stroke();
+        }
+      }
+
+      // Teken 3D racebaan (curbstones + asfalt)
+      if (trackSamples.length > 2) {
+        const len = trackSamples.length;
+        // Sorteer segmenten van ver naar dichtbij voor nette diepte
+        const segs = [];
+        const cPos = getCameraPos();
+        for (let i = 0; i < len; i++) {
+          const pA = trackSamples[i];
+          const pB = trackSamples[(i + 1) % len];
+          const mx = (pA.x + pB.x) * 0.5 - cPos.x;
+          const mz = (pA.z + pB.z) * 0.5 - cPos.z;
+          segs.push({ i, pA, pB, dist2: mx * mx + mz * mz });
+        }
+        segs.sort((a, b) => b.dist2 - a.dist2);
+
+        segs.forEach(({ i, pA, pB }) => {
+          const tx = pB.x - pA.x;
+          const tz = pB.z - pA.z;
+          const tLen = Math.hypot(tx, tz) || 1;
+          const nx = -tz / tLen;
+          const nz = tx / tLen;
+
+          const curbW = TRACK_HALF_WIDTH + 2.5;
+          const aL_c = project3D(pA.x - nx * curbW, 0.1, pA.z - nz * curbW);
+          const aR_c = project3D(pA.x + nx * curbW, 0.1, pA.z + nz * curbW);
+          const bR_c = project3D(pB.x + nx * curbW, 0.1, pB.z + nz * curbW);
+          const bL_c = project3D(pB.x - nx * curbW, 0.1, pB.z - nz * curbW);
+
+          if (aL_c && aR_c && bR_c && bL_c) {
+            ctx.fillStyle = (i % 2 === 0) ? '#ef4444' : '#f8fafc';
+            ctx.beginPath();
+            ctx.moveTo(aL_c.x, aL_c.y);
+            ctx.lineTo(aR_c.x, aR_c.y);
+            ctx.lineTo(bR_c.x, bR_c.y);
+            ctx.lineTo(bL_c.x, bL_c.y);
+            ctx.closePath();
+            ctx.fill();
+          }
+
+          const aL = project3D(pA.x - nx * TRACK_HALF_WIDTH, 0.2, pA.z - nz * TRACK_HALF_WIDTH);
+          const aR = project3D(pA.x + nx * TRACK_HALF_WIDTH, 0.2, pA.z + nz * TRACK_HALF_WIDTH);
+          const bR = project3D(pB.x + nx * TRACK_HALF_WIDTH, 0.2, pB.z + nz * TRACK_HALF_WIDTH);
+          const bL = project3D(pB.x - nx * TRACK_HALF_WIDTH, 0.2, pB.z - nz * TRACK_HALF_WIDTH);
+
+          if (aL && aR && bR && bL) {
+            ctx.fillStyle = i === 0 ? '#f8fafc' : '#1e293b';
+            ctx.beginPath();
+            ctx.moveTo(aL.x, aL.y);
+            ctx.lineTo(aR.x, aR.y);
+            ctx.lineTo(bR.x, bR.y);
+            ctx.lineTo(bL.x, bL.y);
+            ctx.closePath();
+            ctx.fill();
+          }
+        });
+      }
+
+      // Teken 3D F1-wagen in race-modus
+      if (mode === 'race' && trackSamples.length > 2) {
+        draw3DF1Car();
+      }
+
+      // Teken controlepunten in edit-modus
+      if (mode === 'edit') {
+        points.forEach((pt, idx) => {
+          const p = project3D(pt[0], 3, pt[1]);
+          if (!p) return;
+          const r = Math.max(7, Math.min(16, 420 * p.scale));
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+          ctx.fillStyle = idx === 0 ? '#22c55e' : draggingIndex === idx ? '#facc15' : '#ef4444';
+          ctx.fill();
+          ctx.lineWidth = 2.5;
+          ctx.strokeStyle = '#ffffff';
+          ctx.stroke();
+        });
+      }
+    }
+
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
