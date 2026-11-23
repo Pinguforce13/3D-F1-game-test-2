@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>3D F1 Circuit & Racer Pro</title>
+  <title>3D F1 Circuit & Racer</title>
   <style>
     * {
       box-sizing: border-box;
@@ -40,7 +40,7 @@
       border: 1px solid rgba(148, 163, 184, 0.3);
       border-radius: 14px;
       padding: 16px;
-      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.65);
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
       z-index: 100;
       backdrop-filter: blur(8px);
     }
@@ -104,7 +104,7 @@
       font-size: 12px;
       color: #cbd5e1;
       line-height: 1.5;
-      margin-bottom: 12px;
+      margin-bottom: 14px;
     }
 
     .btn-group {
@@ -122,7 +122,7 @@
     button {
       border: none;
       border-radius: 9px;
-      padding: 10px 12px;
+      padding: 11px 12px;
       font-size: 13px;
       font-weight: 700;
       cursor: pointer;
@@ -167,8 +167,8 @@
     }
 
     .stats {
-      margin-top: 12px;
-      padding-top: 10px;
+      margin-top: 14px;
+      padding-top: 12px;
       border-top: 1px solid rgba(148, 163, 184, 0.15);
       display: flex;
       justify-content: space-between;
@@ -210,7 +210,7 @@
     }
 
     .speed {
-      font-size: 38px;
+      font-size: 36px;
       font-weight: 800;
       line-height: 1;
       font-variant-numeric: tabular-nums;
@@ -289,7 +289,7 @@
 
   <div class="panel">
     <div class="title-row">
-      <span class="badge">F1 3D PRO</span>
+      <span class="badge">F1 3D</span>
       <h1>Circuit & Race Studio</h1>
     </div>
 
@@ -303,15 +303,15 @@
 
     <div id="editor-controls">
       <p class="hint">
-        • <b>Sleep</b> de punten om je baan aan te passen.<br />
+        • <b>Sleep</b> de rode/groene punten om je circuit te vormen.<br />
         • Klik op <b>+ Bocht Toevoegen</b> en klik op het gras.<br />
         • <b>Rechtermuis</b> of <b>Shift + Sleep</b> draait de 3D-camera.
       </p>
       <div class="btn-group">
         <button type="button" id="btn-add" class="btn-primary">+ Bocht Toevoegen (UIT)</button>
         <div class="row-2">
-          <button type="button" id="btn-reset" class="btn-secondary">Reset Circuit</button>
-          <button type="button" id="btn-save" class="btn-secondary">Bewaar Eigen Baan</button>
+          <button type="button" id="btn-reset" class="btn-secondary">Reset Baan</button>
+          <button type="button" id="btn-save" class="btn-secondary">Bewaar Baan</button>
         </div>
         <button type="button" id="btn-race" class="btn-race">▶ Start Race</button>
       </div>
@@ -323,4 +323,646 @@
         • <b>S / ↓</b> Remmen / Achteruit<br />
         • <b>A / D</b> of <b>← / →</b> Geleidelijk sturen (inhouden = scherper)<br />
         • <b>R</b> Terug naar startlijn
-      </
+      </p>
+      <div class="btn-group">
+        <button type="button" id="btn-edit" class="btn-edit">✎ Terug naar Tekenen</button>
+      </div>
+    </div>
+
+    <div class="stats">
+      <span>Bochten: <strong id="node-count">6</strong></span>
+      <span id="status-text">Modus: <strong style="color:#4ade80">Tekenen</strong></span>
+    </div>
+  </div>
+
+  <div id="hud" class="hud">
+    <div id="hud-track-name" class="track-badge">Monza Speed</div>
+    <div class="speed"><span id="speed-val">0</span><span>KM/H</span></div>
+    <div class="steer-bar-wrap" title="Stuurhoek">
+      <div id="steer-bar" class="steer-bar-fill"></div>
+    </div>
+    <div class="lap-info">Ronde: <strong id="lap-num">1</strong> | Tijd: <strong id="lap-time">0.00s</strong></div>
+    <div class="best-lap">Beste ronde: <strong id="best-time">--</strong></div>
+    <div id="surface-indicator" class="surface-tag">⚡ ZACHTE CURB VIBRATIE</div>
+  </div>
+
+  <div class="controls-bar" id="bottom-bar">
+    Klaar! Sleep een punt of klik op "+ Bocht Toevoegen" en klik op het gras.
+  </div>
+
+  <script>
+    const PRESET_TRACKS = {
+      monza: {
+        name: 'Monza Speed',
+        points: [
+          [-260, -160],
+          [240, -160],
+          [320, -75],
+          [255, 25],
+          [310, 145],
+          [60, 175],
+          [-250, 120],
+        ],
+      },
+      spa: {
+        name: 'Spa-Francorchamps',
+        points: [
+          [-220, -180],
+          [90, -210],
+          [280, -135],
+          [310, 45],
+          [140, 195],
+          [-20, 75],
+          [-160, 190],
+          [-295, 45],
+        ],
+      },
+      monaco: {
+        name: 'Monaco Technical',
+        points: [
+          [-210, -150],
+          [40, -185],
+          [235, -130],
+          [265, 10],
+          [135, 35],
+          [220, 165],
+          [-30, 190],
+          [-135, 85],
+          [-255, 125],
+        ],
+      },
+    };
+
+    const DEFAULT_POINTS = [
+      [-175, -135],
+      [165, -135],
+      [245, -15],
+      [150, 145],
+      [-40, 75],
+      [-205, 140],
+    ];
+    const STORAGE_KEY = 'f1_3d_custom_track_locked_v1';
+
+    function loadPoints() {
+      try {
+        const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+        if (Array.isArray(raw) && raw.length >= 3) {
+          return raw;
+        }
+      } catch (_) {}
+      return DEFAULT_POINTS.map(function (p) {
+        return [p[0], p[1]];
+      });
+    }
+
+    let customPoints = loadPoints();
+    let activeTrackKey = 'monza';
+    let points = PRESET_TRACKS.monza.points.map(function (p) {
+      return [p[0], p[1]];
+    });
+
+    let mode = 'edit';
+    let addMode = false;
+    let draggingIndex = null;
+    let rotatingCam = false;
+    let lastMouse = { x: 0, y: 0 };
+
+    // Zeer brede baan en duidelijke rood-witte curbs
+    const TRACK_HALF_WIDTH = 56;
+    const CURB_HALF_WIDTH = 65;
+
+    // Camera-instellingen
+    let camYaw = 0.65;
+    let camPitch = 0.85;
+    let camDist = 480;
+    let camTarget = { x: 0, y: 0, z: 0 };
+    let chaseYaw = 0;
+
+    // Auto & race-status (inclusief geleidelijke stuurhoek + wielrotatie)
+    let car = {
+      x: 0,
+      z: 0,
+      angle: 0,
+      speed: 0,
+      steerVisual: 0,
+      steerHold: 0,
+      wheelSpin: 0,
+    };
+    let lap = 1;
+    let lapStart = 0;
+    let bestLap = null;
+    let halfwayReached = false;
+
+    let trees = [];
+    let grassTufts = [];
+    let grandstands = [];
+    let clouds = [];
+
+    const canvas = document.getElementById('game-canvas');
+    const ctx = canvas.getContext('2d');
+
+    function setBar(text) {
+      const el = document.getElementById('bottom-bar');
+      if (el) {
+        el.textContent = text;
+      }
+    }
+
+    function updateNodeCount() {
+      const el = document.getElementById('node-count');
+      if (el) {
+        el.textContent = String(points.length);
+      }
+    }
+
+    function getActiveTrackName() {
+      if (activeTrackKey === 'custom') {
+        return 'Mijn Eigen Baan';
+      }
+      return PRESET_TRACKS[activeTrackKey] ? PRESET_TRACKS[activeTrackKey].name : 'F1 Circuit';
+    }
+
+    function updatePresetButtons() {
+      const ids = {
+        monza: 'preset-monza',
+        spa: 'preset-spa',
+        monaco: 'preset-monaco',
+        custom: 'preset-custom',
+      };
+      Object.keys(ids).forEach(function (k) {
+        const el = document.getElementById(ids[k]);
+        if (el) {
+          el.classList.toggle('active', activeTrackKey === k);
+        }
+      });
+      const hudName = document.getElementById('hud-track-name');
+      if (hudName) {
+        hudName.textContent = getActiveTrackName();
+      }
+    }
+
+    function selectTrack(key) {
+      if (activeTrackKey === 'custom') {
+        customPoints = points.map(function (p) {
+          return [p[0], p[1]];
+        });
+      }
+      activeTrackKey = key;
+      if (key === 'custom') {
+        points = customPoints.map(function (p) {
+          return [p[0], p[1]];
+        });
+        setBar('Mijn Eigen Baan geladen! Sleep punten of voeg bochten toe.');
+      } else if (PRESET_TRACKS[key]) {
+        points = PRESET_TRACKS[key].points.map(function (p) {
+          return [p[0], p[1]];
+        });
+        setBar('Circuit "' + PRESET_TRACKS[key].name + '" gekozen! Druk op Start Race.');
+      }
+      bestLap = null;
+      const bestEl = document.getElementById('best-time');
+      if (bestEl) {
+        bestEl.textContent = '--';
+      }
+      updatePresetButtons();
+      updateNodeCount();
+      if (mode === 'race') {
+        generateEnvironment(sampleTrack(34));
+        resetCar();
+      }
+    }
+
+    // Knop-functies bovenaan zodat ze altijd werken
+    function toggleAdd() {
+      addMode = !addMode;
+      const btn = document.getElementById('btn-add');
+      if (btn) {
+        btn.classList.toggle('active', addMode);
+        btn.textContent = addMode
+          ? '+ Bocht Toevoegen (AAN - klik op gras)'
+          : '+ Bocht Toevoegen (UIT)';
+      }
+      setBar(
+        addMode
+          ? 'Klik ergens op het groene gras om een punt te plaatsen!'
+          : 'Sleep de gekleurde punten om je baan te vormen.'
+      );
+    }
+
+    function resetTrack() {
+      if (activeTrackKey === 'custom') {
+        points = DEFAULT_POINTS.map(function (p) {
+          return [p[0], p[1]];
+        });
+        customPoints = points.map(function (p) {
+          return [p[0], p[1]];
+        });
+      } else if (PRESET_TRACKS[activeTrackKey]) {
+        points = PRESET_TRACKS[activeTrackKey].points.map(function (p) {
+          return [p[0], p[1]];
+        });
+      } else {
+        points = DEFAULT_POINTS.map(function (p) {
+          return [p[0], p[1]];
+        });
+      }
+      updateNodeCount();
+      setBar('Baan gereset naar standaard circuit.');
+    }
+
+    function saveTrack() {
+      customPoints = points.map(function (p) {
+        return [p[0], p[1]];
+      });
+      activeTrackKey = 'custom';
+      updatePresetButtons();
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(customPoints));
+        setBar('Jouw baan is bewaard!');
+      } catch (_) {
+        setBar('Baan bewaard voor deze sessie.');
+      }
+    }
+
+    function catmullRom(p0, p1, p2, p3, t) {
+      const t2 = t * t;
+      const t3 = t2 * t;
+      return {
+        x:
+          0.5 *
+          (2 * p1[0] +
+            (-p0[0] + p2[0]) * t +
+            (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * t2 +
+            (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * t3),
+        z:
+          0.5 *
+          (2 * p1[1] +
+            (-p0[1] + p2[1]) * t +
+            (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2 +
+            (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3),
+      };
+    }
+
+    function sampleTrack(samplesPerSeg) {
+      const segCount = samplesPerSeg || 34;
+      const res = [];
+      const n = points.length;
+      if (n < 3) {
+        return res;
+      }
+
+      for (let i = 0; i < n; i++) {
+        const p0 = points[(i - 1 + n) % n];
+        const p1 = points[i];
+        const p2 = points[(i + 1) % n];
+        const p3 = points[(i + 2) % n];
+
+        for (let s = 0; s < segCount; s++) {
+          res.push(catmullRom(p0, p1, p2, p3, s / segCount));
+        }
+      }
+      return res;
+    }
+
+    function generateEnvironment(trackSamples) {
+      trees = [];
+      grassTufts = [];
+      grandstands = [];
+      clouds = [];
+      let seed = 9182;
+
+      function rand() {
+        seed = (seed * 1664525 + 1013904223) % 4294967296;
+        return seed / 4294967296;
+      }
+
+      for (let c = 0; c < 14; c++) {
+        clouds.push({
+          x: (c / 14) * 1.15 - 0.08,
+          y: 0.07 + rand() * 0.14,
+          w: 90 + rand() * 110,
+          h: 22 + rand() * 16,
+        });
+      }
+
+      if (trackSamples.length > 10) {
+        const standIndices = [2, Math.floor(trackSamples.length * 0.35), Math.floor(trackSamples.length * 0.7)];
+        standIndices.forEach(function (idx) {
+          const pA = trackSamples[idx];
+          const pB = trackSamples[(idx + 1) % trackSamples.length];
+          const tx = pB.x - pA.x;
+          const tz = pB.z - pA.z;
+          const tLen = Math.hypot(tx, tz) || 1;
+          const nx = -tz / tLen;
+          const nz = tx / tLen;
+          const yaw = Math.atan2(tx, tz);
+
+          const gx = pA.x + nx * (CURB_HALF_WIDTH + 34);
+          const gz = pA.z + nz * (CURB_HALF_WIDTH + 34);
+
+          let safe = true;
+          for (let j = 0; j < trackSamples.length; j += 2) {
+            if (Math.hypot(trackSamples[j].x - gx, trackSamples[j].z - gz) < CURB_HALF_WIDTH + 22) {
+              safe = false;
+              break;
+            }
+          }
+          if (safe) {
+            grandstands.push({ x: gx, z: gz, yaw: yaw });
+          }
+        });
+      }
+
+      for (let i = 0; i < 110; i++) {
+        const tx = (rand() - 0.5) * 1050;
+        const tz = (rand() - 0.5) * 1050;
+        let tooClose = false;
+
+        for (let j = 0; j < trackSamples.length; j += 2) {
+          const d = Math.hypot(trackSamples[j].x - tx, trackSamples[j].z - tz);
+          if (d < CURB_HALF_WIDTH + 24) {
+            tooClose = true;
+            break;
+          }
+        }
+
+        if (!tooClose) {
+          trees.push({
+            x: tx,
+            z: tz,
+            scale: 0.85 + rand() * 0.95,
+            crownColor: rand() > 0.5 ? '#15803d' : '#166534',
+            highlightColor: '#22c55e',
+          });
+        }
+      }
+
+      for (let k = 0; k < 310; k++) {
+        const gx = (rand() - 0.5) * 980;
+        const gz = (rand() - 0.5) * 980;
+        let onTrack = false;
+
+        for (let j = 0; j < trackSamples.length; j += 3) {
+          const d = Math.hypot(trackSamples[j].x - gx, trackSamples[j].z - gz);
+          if (d < CURB_HALF_WIDTH + 4) {
+            onTrack = true;
+            break;
+          }
+        }
+
+        if (!onTrack) {
+          grassTufts.push({
+            x: gx,
+            z: gz,
+            w: 4 + rand() * 6,
+            color: rand() > 0.5 ? '#15803d' : '#22c55e',
+          });
+        }
+      }
+    }
+
+    let audioCtx = null;
+    let curbOsc = null;
+    let curbGain = null;
+
+    function updateSurfaceFeedback(surface, speedRatio) {
+      const tag = document.getElementById('surface-indicator');
+      if (tag) {
+        if (surface === 'curb' && speedRatio > 0.08) {
+          tag.textContent = '⚡ ZACHTE CURB VIBRATIE';
+          tag.style.color = '#fbbf24';
+          tag.classList.add('active');
+        } else if (surface === 'grass' && speedRatio > 0.08) {
+          tag.textContent = '🌿 OFF-ROAD OP HET GRAS';
+          tag.style.color = '#4ade80';
+          tag.classList.add('active');
+        } else {
+          tag.classList.remove('active');
+        }
+      }
+
+      try {
+        if (surface === 'curb' && speedRatio > 0.08) {
+          if (!audioCtx) {
+            const AC = window.AudioContext || window.webkitAudioContext;
+            if (AC) {
+              audioCtx = new AC();
+              curbOsc = audioCtx.createOscillator();
+              curbGain = audioCtx.createGain();
+              curbOsc.type = 'triangle';
+              curbOsc.frequency.value = 35;
+              curbGain.gain.value = 0.0001;
+              curbOsc.connect(curbGain);
+              curbGain.connect(audioCtx.destination);
+              curbOsc.start();
+            }
+          }
+          if (audioCtx && audioCtx.state === 'suspended') {
+            audioCtx.resume();
+          }
+          if (curbOsc && curbGain) {
+            curbOsc.frequency.setTargetAtTime(32 + speedRatio * 20, audioCtx.currentTime, 0.04);
+            curbGain.gain.setTargetAtTime(0.022 * speedRatio, audioCtx.currentTime, 0.04);
+          }
+        } else if (curbGain && audioCtx) {
+          curbGain.gain.setTargetAtTime(0.0001, audioCtx.currentTime, 0.05);
+        }
+      } catch (_) {}
+    }
+
+    function resetCar() {
+      const pts = sampleTrack(34);
+      if (pts.length < 4) {
+        return;
+      }
+      const p0 = pts[0];
+      const p1 = pts[1];
+      car.x = p0.x;
+      car.z = p0.z;
+      car.angle = Math.atan2(p1.x - p0.x, p1.z - p0.z);
+      car.speed = 0;
+      car.steerVisual = 0;
+      car.steerHold = 0;
+      car.wheelSpin = 0;
+      chaseYaw = car.angle + Math.PI;
+      camTarget.x = car.x + Math.sin(car.angle) * 20;
+      camTarget.y = 2.2;
+      camTarget.z = car.z + Math.cos(car.angle) * 20;
+      camYaw = chaseYaw;
+      camPitch = 0.32;
+      camDist = 68;
+      lap = 1;
+      lapStart = performance.now();
+      halfwayReached = false;
+      updateSurfaceFeedback('road', 0);
+      document.getElementById('lap-num').textContent = '1';
+      document.getElementById('lap-time').textContent = '0.00s';
+    }
+
+    function setMode(nextMode) {
+      if (nextMode === 'race' && points.length < 3) {
+        setBar('Plaats eerst minimaal 3 punten om te racen!');
+        return;
+      }
+
+      mode = nextMode;
+      draggingIndex = null;
+      const isRace = mode === 'race';
+
+      const editorEl = document.getElementById('editor-controls');
+      const raceEl = document.getElementById('race-controls');
+      const hudEl = document.getElementById('hud');
+      const statusEl = document.getElementById('status-text');
+
+      if (editorEl) editorEl.style.display = isRace ? 'none' : 'block';
+      if (raceEl) raceEl.style.display = isRace ? 'block' : 'none';
+      if (hudEl) hudEl.classList.toggle('visible', isRace);
+      if (statusEl) {
+        statusEl.innerHTML = isRace
+          ? 'Modus: <strong style="color:#fb7185">Racen</strong>'
+          : 'Modus: <strong style="color:#4ade80">Tekenen</strong>';
+      }
+
+      if (isRace) {
+        updatePresetButtons();
+        generateEnvironment(sampleTrack(34));
+        resetCar();
+        setBar('WASD of Pijltjestoetsen • Houd A/D langer in voor scherpere bocht • R = Start');
+      } else {
+        updateSurfaceFeedback('road', 0);
+        camTarget = { x: 0, y: 0, z: 0 };
+        camYaw = 0.65;
+        camPitch = 0.85;
+        camDist = 480;
+        setBar('Sleep een punt of klik op "+ Bocht Toevoegen" en klik op het gras.');
+      }
+    }
+
+    // Koppel knoppen direct via event listeners
+    document.getElementById('preset-monza').addEventListener('click', function () {
+      selectTrack('monza');
+    });
+    document.getElementById('preset-spa').addEventListener('click', function () {
+      selectTrack('spa');
+    });
+    document.getElementById('preset-monaco').addEventListener('click', function () {
+      selectTrack('monaco');
+    });
+    document.getElementById('preset-custom').addEventListener('click', function () {
+      selectTrack('custom');
+    });
+
+    document.getElementById('btn-add').addEventListener('click', toggleAdd);
+    document.getElementById('btn-reset').addEventListener('click', resetTrack);
+    document.getElementById('btn-save').addEventListener('click', saveTrack);
+    document.getElementById('btn-race').addEventListener('click', function () {
+      setMode('race');
+    });
+    document.getElementById('btn-edit').addEventListener('click', function () {
+      setMode('edit');
+    });
+
+    function getCameraPos() {
+      const horiz = Math.cos(camPitch) * camDist;
+      return {
+        x: camTarget.x + Math.sin(camYaw) * horiz,
+        y: camTarget.y + Math.sin(camPitch) * camDist,
+        z: camTarget.z + Math.cos(camYaw) * horiz,
+      };
+    }
+
+    function project3D(wx, wy, wz) {
+      const cPos = getCameraPos();
+      const dx = wx - cPos.x;
+      const dy = wy - cPos.y;
+      const dz = wz - cPos.z;
+
+      const fx = camTarget.x - cPos.x;
+      const fy = camTarget.y - cPos.y;
+      const fz = camTarget.z - cPos.z;
+      const fLen = Math.hypot(fx, fy, fz) || 1;
+      const fwd = { x: fx / fLen, y: fy / fLen, z: fz / fLen };
+
+      let rx = -fwd.z;
+      let ry = 0;
+      let rz = fwd.x;
+      const rLen = Math.hypot(rx, ry, rz) || 1;
+      rx /= rLen;
+      rz /= rLen;
+
+      const ux = ry * fwd.z - rz * fwd.y;
+      const uy = rz * fwd.x - rx * fwd.z;
+      const uz = rx * fwd.y - ry * fwd.x;
+
+      const camX = dx * rx + dy * ry + dz * rz;
+      const camY = dx * ux + dy * uy + dz * uz;
+      const camZ = dx * fwd.x + dy * fwd.y + dz * fwd.z;
+
+      if (camZ <= 2) {
+        return null;
+      }
+
+      const fov = Math.min(canvas.width, canvas.height) * 0.95;
+      const scale = fov / camZ;
+
+      return {
+        x: canvas.width * 0.5 + camX * scale,
+        y: canvas.height * 0.5 - camY * scale,
+        scale: scale,
+        depth: camZ,
+      };
+    }
+
+    function screenToGround(sx, sy) {
+      const cPos = getCameraPos();
+      const fov = Math.min(canvas.width, canvas.height) * 0.95;
+      const nx = (sx - canvas.width * 0.5) / fov;
+      const ny = -(sy - canvas.height * 0.5) / fov;
+
+      const fx = camTarget.x - cPos.x;
+      const fy = camTarget.y - cPos.y;
+      const fz = camTarget.z - cPos.z;
+      const fLen = Math.hypot(fx, fy, fz) || 1;
+      const fwd = { x: fx / fLen, y: fy / fLen, z: fz / fLen };
+
+      let rx = -fwd.z;
+      let ry = 0;
+      let rz = fwd.x;
+      const rLen = Math.hypot(rx, ry, rz) || 1;
+      rx /= rLen;
+      rz /= rLen;
+
+      const ux = ry * fwd.z - rz * fwd.y;
+      const uy = rz * fwd.x - rx * fwd.z;
+      const uz = rx * fwd.y - ry * fwd.x;
+
+      const dirX = fwd.x + nx * rx + ny * ux;
+      const dirY = fwd.y + nx * ry + ny * uy;
+      const dirZ = fwd.z + nx * rz + ny * uz;
+
+      if (Math.abs(dirY) < 0.0001) {
+        return null;
+      }
+
+      const t = -cPos.y / dirY;
+      if (t <= 0) {
+        return null;
+      }
+
+      return {
+        x: cPos.x + dirX * t,
+        z: cPos.z + dirZ * t,
+      };
+    }
+
+    const keys = {};
+    window.addEventListener('keydown', function (e) {
+      const k = e.key.toLowerCase();
+      keys[k] = true;
+      if (mode === 'race' && ['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].indexOf(k) !== -1) {
+        e.preventDefault();
+      }
+    });
+
+    window.addEventListener('keyup', function (e) {
+      keys[e.
