@@ -35,7 +35,7 @@
       position: fixed;
       top: 16px;
       left: 16px;
-      width: 340px;
+      width: 342px;
       background: rgba(15, 23, 42, 0.94);
       border: 1px solid rgba(148, 163, 184, 0.3);
       border-radius: 14px;
@@ -330,7 +330,7 @@
     </div>
 
     <div class="stats">
-      <span>Bochten: <strong id="node-count">6</strong></span>
+      <span>Bochten: <strong id="node-count">7</strong></span>
       <span id="status-text">Modus: <strong style="color:#4ade80">Tekenen</strong></span>
     </div>
   </div>
@@ -965,4 +965,715 @@
     });
 
     window.addEventListener('keyup', function (e) {
-      keys[e.
+      keys[e.key.toLowerCase()] = false;
+    });
+
+    function normalizeAngleDiff(target, current) {
+      let diff = target - current;
+      while (diff > Math.PI) {
+        diff -= Math.PI * 2;
+      }
+      while (diff < -Math.PI) {
+        diff += Math.PI * 2;
+      }
+      return diff;
+    }
+
+    canvas.addEventListener('contextmenu', function (e) {
+      e.preventDefault();
+    });
+
+    canvas.addEventListener('mousedown', function (e) {
+      lastMouse = { x: e.clientX, y: e.clientY };
+
+      if (e.button === 2 || (e.button === 0 && e.shiftKey)) {
+        rotatingCam = true;
+        return;
+      }
+
+      if (mode !== 'edit' || e.button !== 0) {
+        return;
+      }
+
+      for (let i = 0; i < points.length; i++) {
+        const proj = project3D(points[i][0], 3, points[i][1]);
+        if (proj && Math.hypot(proj.x - e.clientX, proj.y - e.clientY) < 20) {
+          draggingIndex = i;
+          if (activeTrackKey !== 'custom') {
+            activeTrackKey = 'custom';
+            updatePresetButtons();
+          }
+          return;
+        }
+      }
+
+      if (addMode) {
+        const hit = screenToGround(e.clientX, e.clientY);
+        if (hit) {
+          points.push([
+            Math.max(-360, Math.min(360, Math.round(hit.x))),
+            Math.max(-360, Math.min(360, Math.round(hit.z))),
+          ]);
+          if (activeTrackKey !== 'custom') {
+            activeTrackKey = 'custom';
+            updatePresetButtons();
+          }
+          updateNodeCount();
+        }
+      }
+    });
+
+    window.addEventListener('mousemove', function (e) {
+      const dx = e.clientX - lastMouse.x;
+      const dy = e.clientY - lastMouse.y;
+      lastMouse = { x: e.clientX, y: e.clientY };
+
+      if (rotatingCam && mode === 'edit') {
+        camYaw -= dx * 0.008;
+        camPitch = Math.max(0.22, Math.min(1.45, camPitch + dy * 0.007));
+        return;
+      }
+
+      if (mode === 'edit' && draggingIndex !== null) {
+        const hit = screenToGround(e.clientX, e.clientY);
+        if (hit) {
+          points[draggingIndex] = [
+            Math.max(-360, Math.min(360, hit.x)),
+            Math.max(-360, Math.min(360, hit.z)),
+          ];
+        }
+      }
+    });
+
+    window.addEventListener('mouseup', function () {
+      draggingIndex = null;
+      rotatingCam = false;
+    });
+
+    canvas.addEventListener(
+      'wheel',
+      function (e) {
+        if (mode !== 'edit') {
+          return;
+        }
+        e.preventDefault();
+        camDist = Math.max(130, Math.min(720, camDist + e.deltaY * 0.3));
+      },
+      { passive: false }
+    );
+
+    function draw3DBox(cx, cy, cz, w, h, d, yaw, fillColor, strokeColor) {
+      const cos = Math.cos(yaw);
+      const sin = Math.sin(yaw);
+      const hw = w * 0.5;
+      const hh = h * 0.5;
+      const hd = d * 0.5;
+
+      const corners = [
+        [-hw, -hh, -hd],
+        [hw, -hh, -hd],
+        [hw, -hh, hd],
+        [-hw, -hh, hd],
+        [-hw, hh, -hd],
+        [hw, hh, -hd],
+        [hw, hh, hd],
+        [-hw, hh, hd],
+      ].map(function (c) {
+        const lx = c[0];
+        const ly = c[1];
+        const lz = c[2];
+        const rx = lx * cos + lz * sin;
+        const rz = -lx * sin + lz * cos;
+        return project3D(cx + rx, cy + ly, cz + rz);
+      });
+
+      if (
+        corners.some(function (c) {
+          return !c;
+        })
+      ) {
+        return;
+      }
+
+      const faces = [
+        [4, 5, 6, 7],
+        [0, 1, 5, 4],
+        [1, 2, 6, 5],
+        [2, 3, 7, 6],
+        [3, 0, 4, 7],
+      ];
+
+      ctx.fillStyle = fillColor;
+      ctx.strokeStyle = strokeColor || fillColor;
+      ctx.lineWidth = 1;
+
+      faces.forEach(function (f, idx) {
+        ctx.beginPath();
+        f.forEach(function (cIdx, i) {
+          const pt = corners[cIdx];
+          if (i === 0) {
+            ctx.moveTo(pt.x, pt.y);
+          } else {
+            ctx.lineTo(pt.x, pt.y);
+          }
+        });
+        ctx.closePath();
+
+        if (idx === 0) {
+          ctx.fill();
+        } else {
+          ctx.globalAlpha = 0.85;
+          ctx.fill();
+          ctx.globalAlpha = 1;
+        }
+        ctx.stroke();
+      });
+    }
+
+    // Echt rond 3D F1-wiel met velg, bandwang & meedraaiende streep/spaken
+    function draw3DWheel(wx, wy, wz, radius, width, yaw, spinAngle) {
+      const cos = Math.cos(yaw);
+      const sin = Math.sin(yaw);
+      const segments = 14;
+      const hw = width * 0.5;
+
+      function localToProj(lx, ly, lz) {
+        const rx = lx * cos + lz * sin;
+        const rz = -lx * sin + lz * cos;
+        return project3D(wx + rx, wy + ly, wz + rz);
+      }
+
+      const outerPts = [];
+      const innerPts = [];
+      const rimOuterPts = [];
+      const rimInnerPts = [];
+
+      for (let i = 0; i < segments; i++) {
+        const a = (i / segments) * Math.PI * 2 + spinAngle;
+        const ly = Math.sin(a) * radius;
+        const lz = Math.cos(a) * radius;
+        const rly = Math.sin(a) * (radius * 0.55);
+        const rlz = Math.cos(a) * (radius * 0.55);
+
+        const pOut = localToProj(hw, ly, lz);
+        const pIn = localToProj(-hw, ly, lz);
+        const rOut = localToProj(hw + 0.06, rly, rlz);
+        const rIn = localToProj(-hw - 0.06, rly, rlz);
+
+        if (!pOut || !pIn || !rOut || !rIn) {
+          return;
+        }
+        outerPts.push(pOut);
+        innerPts.push(pIn);
+        rimOuterPts.push(rOut);
+        rimInnerPts.push(rIn);
+      }
+
+      for (let i = 0; i < segments; i++) {
+        const next = (i + 1) % segments;
+        ctx.beginPath();
+        ctx.moveTo(outerPts[i].x, outerPts[i].y);
+        ctx.lineTo(outerPts[next].x, outerPts[next].y);
+        ctx.lineTo(innerPts[next].x, innerPts[next].y);
+        ctx.lineTo(innerPts[i].x, innerPts[i].y);
+        ctx.closePath();
+        ctx.fillStyle = i % 2 === 0 ? '#111827' : '#1f2937';
+        ctx.fill();
+      }
+
+      [outerPts, innerPts].forEach(function (ring) {
+        ctx.beginPath();
+        ring.forEach(function (p, idx) {
+          if (idx === 0) ctx.moveTo(p.x, p.y);
+          else ctx.lineTo(p.x, p.y);
+        });
+        ctx.closePath();
+        ctx.fillStyle = '#0f172a';
+        ctx.fill();
+        ctx.strokeStyle = '#ef4444';
+        ctx.lineWidth = 1.4;
+        ctx.stroke();
+      });
+
+      [rimOuterPts, rimInnerPts].forEach(function (rim) {
+        ctx.beginPath();
+        rim.forEach(function (p, idx) {
+          if (idx === 0) ctx.moveTo(p.x, p.y);
+          else ctx.lineTo(p.x, p.y);
+        });
+        ctx.closePath();
+        ctx.fillStyle = '#334155';
+        ctx.fill();
+
+        ctx.strokeStyle = '#cbd5e1';
+        ctx.lineWidth = 1.2;
+        for (let s = 0; s < segments; s += 3) {
+          const opp = (s + Math.floor(segments / 2)) % segments;
+          ctx.beginPath();
+          ctx.moveTo(rim[s].x, rim[s].y);
+          ctx.lineTo(rim[opp].x, rim[opp].y);
+          ctx.stroke();
+        }
+      });
+    }
+
+    function drawTree(tree, vibX, vibY) {
+      const base = project3D(tree.x, 0, tree.z);
+      const mid = project3D(tree.x, 15 * tree.scale, tree.z);
+      const top = project3D(tree.x, 26 * tree.scale, tree.z);
+      if (!base || !mid || !top) {
+        return;
+      }
+
+      ctx.strokeStyle = '#78350f';
+      ctx.lineWidth = Math.max(2, 2.6 * base.scale * tree.scale);
+      ctx.beginPath();
+      ctx.moveTo(base.x + vibX, base.y + vibY);
+      ctx.lineTo(top.x + vibX, top.y + vibY);
+      ctx.stroke();
+
+      const r1 = Math.max(5.5, 11 * mid.scale * tree.scale);
+      ctx.fillStyle = tree.crownColor;
+      ctx.beginPath();
+      ctx.arc(mid.x + vibX, mid.y + vibY, r1, 0, Math.PI * 2);
+      ctx.fill();
+
+      const r = Math.max(4.5, 8.5 * top.scale * tree.scale);
+      ctx.fillStyle = tree.highlightColor;
+      ctx.beginPath();
+      ctx.arc(top.x - r * 0.25 + vibX, top.y - r * 0.25 + vibY, r * 0.75, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    function drawGrandstand(stand, vibX, vibY) {
+      draw3DBox(stand.x, 4, stand.z, 18, 8, 54, stand.yaw, '#334155', '#64748b');
+      draw3DBox(stand.x, 11, stand.z, 20, 1.5, 58, stand.yaw, '#e11d48', '#fda4af');
+    }
+
+    function draw3DF1Car() {
+      const cos = Math.cos(car.angle);
+      const sin = Math.sin(car.angle);
+
+      function toWorld(lx, ly, lz) {
+        return {
+          x: car.x + lx * cos + lz * sin,
+          y: ly,
+          z: car.z - lx * sin + lz * cos,
+        };
+      }
+
+      const frontWheelYaw = car.angle + car.steerVisual * 0.46;
+      const fLeft = toWorld(-4.3, 1.6, 6.5);
+      const fRight = toWorld(4.3, 1.6, 6.5);
+      draw3DWheel(fLeft.x, fLeft.y, fLeft.z, 1.6, 1.75, frontWheelYaw, car.wheelSpin);
+      draw3DWheel(fRight.x, fRight.y, fRight.z, 1.6, 1.75, frontWheelYaw, car.wheelSpin);
+
+      const rLeft = toWorld(-4.6, 1.75, -5.2);
+      const rRight = toWorld(4.6, 1.75, -5.2);
+      draw3DWheel(rLeft.x, rLeft.y, rLeft.z, 1.75, 2.15, car.angle, car.wheelSpin);
+      draw3DWheel(rRight.x, rRight.y, rRight.z, 1.75, 2.15, car.angle, car.wheelSpin);
+
+      const floorPos = toWorld(0, 0.75, -0.3);
+      draw3DBox(floorPos.x, floorPos.y, floorPos.z, 6.8, 0.35, 12.2, car.angle, '#0f172a', '#334155');
+
+      const bodyPos = toWorld(0, 1.8, 0.4);
+      draw3DBox(bodyPos.x, bodyPos.y, bodyPos.z, 5.2, 1.6, 13.5, car.angle, '#e11d48', '#9f1239');
+
+      const leftPod = toWorld(-3.1, 1.65, -0.5);
+      draw3DBox(leftPod.x, leftPod.y, leftPod.z, 1.5, 1.3, 6.5, car.angle, '#be123c', '#881337');
+
+      const rightPod = toWorld(3.1, 1.65, -0.5);
+      draw3DBox(rightPod.x, rightPod.y, rightPod.z, 1.5, 1.3, 6.5, car.angle, '#be123c', '#881337');
+
+      const airboxPos = toWorld(0, 3.2, -1.5);
+      draw3DBox(airboxPos.x, airboxPos.y, airboxPos.z, 1.5, 1.3, 4.2, car.angle, '#e11d48', '#f8fafc');
+
+      const cockpitPos = toWorld(0, 2.8, 0.2);
+      draw3DBox(cockpitPos.x, cockpitPos.y, cockpitPos.z, 2.6, 1.1, 4.2, car.angle, '#0f172a', '#334155');
+
+      const helmetPos = toWorld(0, 3.3, 0.1);
+      draw3DBox(helmetPos.x, helmetPos.y, helmetPos.z, 1.1, 0.9, 1.15, car.angle, '#facc15', '#fef08a');
+
+      const nosePos = toWorld(0, 1.5, 8.8);
+      draw3DBox(nosePos.x, nosePos.y, nosePos.z, 2.4, 1.1, 4.5, car.angle, '#e11d48', '#881337');
+
+      const frontWingPos = toWorld(0, 0.8, 11.2);
+      draw3DBox(frontWingPos.x, frontWingPos.y, frontWingPos.z, 8.4, 0.45, 2.2, car.angle, '#f8fafc', '#cbd5e1');
+
+      const rearWingPos = toWorld(0, 3.8, -6.6);
+      draw3DBox(rearWingPos.x, rearWingPos.y, rearWingPos.z, 7.0, 0.55, 2.0, car.angle, '#e11d48', '#f8fafc');
+    }
+
+    function draw3DGroundPlane(vibX, vibY) {
+      const cPos = getCameraPos();
+      const ahead = project3D(
+        camTarget.x + (camTarget.x - cPos.x) * 40,
+        0,
+        camTarget.z + (camTarget.z - cPos.z) * 40
+      );
+      const horizonY = ahead
+        ? Math.max(canvas.height * 0.25, Math.min(canvas.height * 0.65, ahead.y))
+        : canvas.height * 0.36;
+
+      ctx.fillStyle = '#0f766e';
+      ctx.beginPath();
+      ctx.moveTo(0, horizonY + 2);
+      for (let i = 0; i <= 18; i++) {
+        const hx = (i / 18) * canvas.width;
+        const wave = Math.sin(i * 0.85 + camYaw * 2.5) * 20 + Math.cos(i * 1.4 - camYaw * 1.5) * 12;
+        ctx.lineTo(hx, horizonY - 12 - Math.abs(wave));
+      }
+      ctx.lineTo(canvas.width, horizonY + 2);
+      ctx.closePath();
+      ctx.fill();
+
+      const grassGrad = ctx.createLinearGradient(0, horizonY, 0, canvas.height);
+      grassGrad.addColorStop(0, '#15803d');
+      grassGrad.addColorStop(0.4, '#16a34a');
+      grassGrad.addColorStop(1, '#14532d');
+      ctx.fillStyle = grassGrad;
+      ctx.fillRect(0, horizonY, canvas.width, canvas.height - horizonY);
+
+      for (let i = 0; i < grassTufts.length; i++) {
+        const g = grassTufts[i];
+        const p = project3D(g.x, 0.02, g.z);
+        if (!p || p.y < horizonY) {
+          continue;
+        }
+        const size = Math.max(1.5, g.w * p.scale * 1.4);
+        ctx.fillStyle = g.color;
+        ctx.fillRect(p.x - size + vibX, p.y - size * 0.3 + vibY, size * 2, size * 0.6);
+      }
+    }
+
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+
+    window.addEventListener('resize', resize);
+    resize();
+    updatePresetButtons();
+    updateNodeCount();
+
+    let lastTime = performance.now();
+
+    function loop(now) {
+      requestAnimationFrame(loop);
+      const dt = Math.min((now - lastTime) / 1000, 0.05);
+      lastTime = now;
+
+      const trackSamples = sampleTrack(34);
+      let surface = 'road';
+      let vibX = 0;
+      let vibY = 0;
+
+      if (mode === 'race' && trackSamples.length > 5) {
+        if (keys['r']) {
+          resetCar();
+        }
+
+        const gas = keys['w'] || keys['arrowup'];
+        const brake = keys['s'] || keys['arrowdown'];
+        const left = keys['a'] || keys['arrowleft'];
+        const right = keys['d'] || keys['arrowright'];
+
+        let bestIdx = 0;
+        let minD2 = Infinity;
+
+        for (let i = 0; i < trackSamples.length; i++) {
+          const dx = trackSamples[i].x - car.x;
+          const dz = trackSamples[i].z - car.z;
+          const d2 = dx * dx + dz * dz;
+          if (d2 < minD2) {
+            minD2 = d2;
+            bestIdx = i;
+          }
+        }
+
+        const dist = Math.sqrt(minD2);
+        if (dist <= TRACK_HALF_WIDTH) {
+          surface = 'road';
+        } else if (dist <= CURB_HALF_WIDTH + 2) {
+          surface = 'curb';
+        } else {
+          surface = 'grass';
+        }
+
+        const maxSpeed = surface === 'grass' ? 88 : 195;
+        const accel = surface === 'grass' ? 68 : 138;
+
+        if (gas) {
+          car.speed += accel * dt;
+        } else if (brake) {
+          car.speed -= 110 * dt;
+        } else {
+          car.speed *= Math.pow(surface === 'grass' ? 0.16 : 0.3, dt);
+        }
+
+        car.speed = Math.max(-45, Math.min(maxSpeed, car.speed));
+
+        // Geleidelijk sturen op basis van hoe lang je de knop inhoudt
+        const steerDir = (left ? 1 : 0) - (right ? 1 : 0);
+        if (steerDir !== 0) {
+          const sameSide = Math.sign(steerDir) === Math.sign(car.steerHold);
+          const buildRate = sameSide ? 2.4 : 4.8;
+          car.steerHold += steerDir * buildRate * dt;
+          car.steerHold = Math.max(-1, Math.min(1, car.steerHold));
+        } else {
+          const returnRate = 4.0;
+          if (Math.abs(car.steerHold) <= returnRate * dt) {
+            car.steerHold = 0;
+          } else {
+            car.steerHold -= Math.sign(car.steerHold) * returnRate * dt;
+          }
+        }
+
+        const progressiveSteer = Math.sign(car.steerHold) * Math.pow(Math.abs(car.steerHold), 1.35);
+        car.steerVisual += (progressiveSteer - car.steerVisual) * Math.min(1, dt * 16);
+
+        const steerBar = document.getElementById('steer-bar');
+        if (steerBar) {
+          const pct = Math.abs(progressiveSteer) * 50;
+          steerBar.style.width = pct.toFixed(1) + '%';
+          steerBar.style.left = progressiveSteer > 0 ? (50 - pct).toFixed(1) + '%' : '50%';
+        }
+
+        if (Math.abs(car.speed) > 2) {
+          const dir = car.speed >= 0 ? 1 : -1;
+          car.angle += progressiveSteer * 2.5 * dir * dt;
+        }
+
+        car.x += Math.sin(car.angle) * car.speed * dt;
+        car.z += Math.cos(car.angle) * car.speed * dt;
+        car.wheelSpin += car.speed * 0.14 * dt;
+
+        const speedRatio = Math.min(1, Math.abs(car.speed) / 145);
+        updateSurfaceFeedback(surface, speedRatio);
+
+        if (surface === 'curb' && Math.abs(car.speed) > 8) {
+          vibX = Math.sin(now * 0.085) * 1.3 * speedRatio;
+          vibY = Math.cos(now * 0.11) * 1.0 * speedRatio;
+        } else if (surface === 'grass' && Math.abs(car.speed) > 10) {
+          vibX = Math.sin(now * 0.05) * 0.7 * speedRatio;
+          vibY = Math.cos(now * 0.06) * 0.7 * speedRatio;
+        }
+
+        const progress = bestIdx / trackSamples.length;
+        if (progress > 0.45 && progress < 0.65) {
+          halfwayReached = true;
+        }
+        if (halfwayReached && progress < 0.07) {
+          const sec = (now - lapStart) / 1000;
+          if (bestLap === null || sec < bestLap) {
+            bestLap = sec;
+            document.getElementById('best-time').textContent = bestLap.toFixed(2) + 's';
+          }
+          lap += 1;
+          lapStart = now;
+          halfwayReached = false;
+          document.getElementById('lap-num').textContent = String(lap);
+        }
+
+        document.getElementById('lap-time').textContent = ((now - lapStart) / 1000).toFixed(2) + 's';
+        document.getElementById('speed-val').textContent = String(Math.round(Math.abs(car.speed) * 1.8));
+
+        const targetCameraYaw = car.angle + Math.PI;
+        const yawDiff = normalizeAngleDiff(targetCameraYaw, chaseYaw);
+        chaseYaw += yawDiff * Math.min(1, dt * 4.5);
+
+        camTarget.x = car.x + Math.sin(car.angle) * 20;
+        camTarget.y = 2.2;
+        camTarget.z = car.z + Math.cos(car.angle) * 20;
+        camYaw = chaseYaw;
+        camPitch = 0.32;
+        camDist = 68;
+      }
+
+      if (mode === 'race') {
+        const skyGrad = ctx.createLinearGradient(0, 0, 0, canvas.height * 0.6);
+        skyGrad.addColorStop(0, '#0284c7');
+        skyGrad.addColorStop(0.6, '#38bdf8');
+        skyGrad.addColorStop(1, '#bae6fd');
+        ctx.fillStyle = skyGrad;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        const sunX = canvas.width * 0.78;
+        const sunY = canvas.height * 0.14;
+        const sunGlow = ctx.createRadialGradient(sunX, sunY, 8, sunX, sunY, 95);
+        sunGlow.addColorStop(0, 'rgba(254, 249, 195, 1)');
+        sunGlow.addColorStop(0.35, 'rgba(253, 224, 71, 0.75)');
+        sunGlow.addColorStop(1, 'rgba(253, 224, 71, 0)');
+        ctx.fillStyle = sunGlow;
+        ctx.beginPath();
+        ctx.arc(sunX, sunY, 95, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.72)';
+        clouds.forEach(function (cl) {
+          const cx =
+            ((((cl.x * canvas.width - camYaw * 90) % (canvas.width + 260)) + (canvas.width + 260)) %
+              (canvas.width + 260)) -
+            130;
+          const cy = cl.y * canvas.height;
+          ctx.beginPath();
+          ctx.ellipse(cx, cy, cl.w * 0.5, cl.h * 0.5, 0, 0, Math.PI * 2);
+          ctx.ellipse(cx - cl.w * 0.25, cy + 4, cl.w * 0.32, cl.h * 0.4, 0, 0, Math.PI * 2);
+          ctx.ellipse(cx + cl.w * 0.28, cy + 3, cl.w * 0.35, cl.h * 0.42, 0, 0, Math.PI * 2);
+          ctx.fill();
+        });
+
+        draw3DGroundPlane(vibX, vibY);
+      } else {
+        const skyGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+        skyGrad.addColorStop(0, '#090d16');
+        skyGrad.addColorStop(0.55, '#111827');
+        skyGrad.addColorStop(1, '#14532d');
+        ctx.fillStyle = skyGrad;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        const groundSpan = 400;
+        const step = 60;
+        ctx.strokeStyle = 'rgba(34, 197, 94, 0.22)';
+        ctx.lineWidth = 1;
+
+        for (let g = -groundSpan; g <= groundSpan; g += step) {
+          const a1 = project3D(g, 0, -groundSpan);
+          const a2 = project3D(g, 0, groundSpan);
+          if (a1 && a2) {
+            ctx.beginPath();
+            ctx.moveTo(a1.x, a1.y);
+            ctx.lineTo(a2.x, a2.y);
+            ctx.stroke();
+          }
+          const b1 = project3D(-groundSpan, 0, g);
+          const b2 = project3D(groundSpan, 0, g);
+          if (b1 && b2) {
+            ctx.beginPath();
+            ctx.moveTo(b1.x, b1.y);
+            ctx.lineTo(b2.x, b2.y);
+            ctx.stroke();
+          }
+        }
+      }
+
+      if (trackSamples.length > 2) {
+        const len = trackSamples.length;
+        const segs = [];
+        const cPos = getCameraPos();
+
+        for (let i = 0; i < len; i++) {
+          const pA = trackSamples[i];
+          const pB = trackSamples[(i + 1) % len];
+          const mx = (pA.x + pB.x) * 0.5 - cPos.x;
+          const mz = (pA.z + pB.z) * 0.5 - cPos.z;
+          segs.push({ i: i, pA: pA, pB: pB, dist2: mx * mx + mz * mz });
+        }
+
+        segs.sort(function (a, b) {
+          return b.dist2 - a.dist2;
+        });
+
+        segs.forEach(function (seg) {
+          const pA = seg.pA;
+          const pB = seg.pB;
+          const i = seg.i;
+
+          const tx = pB.x - pA.x;
+          const tz = pB.z - pA.z;
+          const tLen = Math.hypot(tx, tz) || 1;
+          const nx = -tz / tLen;
+          const nz = tx / tLen;
+
+          const aL_c = project3D(pA.x - nx * CURB_HALF_WIDTH, 0.1, pA.z - nz * CURB_HALF_WIDTH);
+          const aR_c = project3D(pA.x + nx * CURB_HALF_WIDTH, 0.1, pA.z + nz * CURB_HALF_WIDTH);
+          const bR_c = project3D(pB.x + nx * CURB_HALF_WIDTH, 0.1, pB.z + nz * CURB_HALF_WIDTH);
+          const bL_c = project3D(pB.x - nx * CURB_HALF_WIDTH, 0.1, pB.z - nz * CURB_HALF_WIDTH);
+
+          if (aL_c && aR_c && bR_c && bL_c) {
+            ctx.fillStyle = i % 2 === 0 ? '#ef4444' : '#f8fafc';
+            ctx.beginPath();
+            ctx.moveTo(aL_c.x + vibX, aL_c.y + vibY);
+            ctx.lineTo(aR_c.x + vibX, aR_c.y + vibY);
+            ctx.lineTo(bR_c.x + vibX, bR_c.y + vibY);
+            ctx.lineTo(bL_c.x + vibX, bL_c.y + vibY);
+            ctx.closePath();
+            ctx.fill();
+          }
+
+          const aL = project3D(pA.x - nx * TRACK_HALF_WIDTH, 0.2, pA.z - nz * TRACK_HALF_WIDTH);
+          const aR = project3D(pA.x + nx * TRACK_HALF_WIDTH, 0.2, pA.z + nz * TRACK_HALF_WIDTH);
+          const bR = project3D(pB.x + nx * TRACK_HALF_WIDTH, 0.2, pB.z + nz * TRACK_HALF_WIDTH);
+          const bL = project3D(pB.x - nx * TRACK_HALF_WIDTH, 0.2, pB.z - nz * TRACK_HALF_WIDTH);
+
+          if (aL && aR && bR && bL) {
+            ctx.fillStyle = i === 0 ? '#f8fafc' : i % 2 === 0 ? '#1e293b' : '#263349';
+            ctx.beginPath();
+            ctx.moveTo(aL.x + vibX, aL.y + vibY);
+            ctx.lineTo(aR.x + vibX, aR.y + vibY);
+            ctx.lineTo(bR.x + vibX, bR.y + vibY);
+            ctx.lineTo(bL.x + vibX, bL.y + vibY);
+            ctx.closePath();
+            ctx.fill();
+
+            ctx.strokeStyle = 'rgba(248, 250, 252, 0.42)';
+            ctx.lineWidth = 1.4;
+            ctx.beginPath();
+            ctx.moveTo(aL.x + vibX, aL.y + vibY);
+            ctx.lineTo(bL.x + vibX, bL.y + vibY);
+            ctx.moveTo(aR.x + vibX, aR.y + vibY);
+            ctx.lineTo(bR.x + vibX, bR.y + vibY);
+            ctx.stroke();
+          }
+        });
+      }
+
+      if (mode === 'race') {
+        const cPos = getCameraPos();
+
+        grandstands.forEach(function (st) {
+          drawGrandstand(st, vibX, vibY);
+        });
+
+        const sortedTrees = trees
+          .map(function (t) {
+            return {
+              t: t,
+              d2: (t.x - cPos.x) * (t.x - cPos.x) + (t.z - cPos.z) * (t.z - cPos.z),
+            };
+          })
+          .sort(function (a, b) {
+            return b.d2 - a.d2;
+          });
+
+        sortedTrees.forEach(function (item) {
+          drawTree(item.t, vibX, vibY);
+        });
+      }
+
+      if (mode === 'race' && trackSamples.length > 2) {
+        draw3DF1Car();
+      }
+
+      if (mode === 'edit') {
+        points.forEach(function (pt, idx) {
+          const p = project3D(pt[0], 3, pt[1]);
+          if (!p) {
+            return;
+          }
+          const r = Math.max(7, Math.min(16, 520 * p.scale));
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+          ctx.fillStyle = idx === 0 ? '#22c55e' : draggingIndex === idx ? '#facc15' : '#ef4444';
+          ctx.fill();
+          ctx.lineWidth = 2.5;
+          ctx.strokeStyle = '#ffffff';
+          ctx.stroke();
+        });
+      }
+    }
+
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
